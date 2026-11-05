@@ -1,0 +1,265 @@
+// Prisma schema for LMS Ujian Online
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      String   // ADMIN | DOSEN | MAHASISWA
+  nip       String?
+  nim       String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // relations
+  dosenAjar       DosenAjar[]       @relation("DosenTeaches")
+  mahasiswaKelas  MahasiswaKelas[]
+  tugasCreated    Tugas[]           @relation("TugasCreator")
+  tugasSubmits    TugasSubmission[]
+  absensiRecords  AbsensiRecord[]
+  ujianCreated    Ujian[]           @relation("UjianCreator")
+  ujianSessions   UjianSession[]
+  jawabanUjian    JawabanUjian[]
+  logs            LogHistory[]
+}
+
+model Prodi {
+  id        String   @id @default(cuid())
+  name      String
+  code      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kelas      Kelas[]
+  mataKuliah MataKuliah[]
+}
+
+model Kelas {
+  id        String   @id @default(cuid())
+  name      String
+  prodiId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  prodi           Prodi            @relation(fields: [prodiId], references: [id], onDelete: Cascade)
+  mahasiswaKelas  MahasiswaKelas[]
+  dosenAjar       DosenAjar[]
+}
+
+model MataKuliah {
+  id        String   @id @default(cuid())
+  name      String
+  code      String
+  sks       Int
+  semester  Int
+  prodiId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  prodi     Prodi        @relation(fields: [prodiId], references: [id], onDelete: Cascade)
+  dosenAjar DosenAjar[]
+}
+
+// Dosen teaches a mata kuliah in a class on a schedule
+model DosenAjar {
+  id           String   @id @default(cuid())
+  dosenId      String
+  mataKuliahId String
+  kelasId      String
+  scheduleDay  String   // Senin, Selasa, ...
+  scheduleTime String   // 08:00-10:00
+  room         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  dosen      User        @relation("DosenTeaches", fields: [dosenId], references: [id], onDelete: Cascade)
+  mataKuliah MataKuliah  @relation(fields: [mataKuliahId], references: [id], onDelete: Cascade)
+  kelas      Kelas       @relation(fields: [kelasId], references: [id], onDelete: Cascade)
+
+  tugas     Tugas[]
+  absensi   Absensi[]
+  ujian     Ujian[]
+}
+
+model MahasiswaKelas {
+  id           String   @id @default(cuid())
+  mahasiswaId  String
+  kelasId      String
+  createdAt    DateTime @default(now())
+
+  mahasiswa User  @relation(fields: [mahasiswaId], references: [id], onDelete: Cascade)
+  kelas     Kelas @relation(fields: [kelasId], references: [id], onDelete: Cascade)
+
+  @@unique([mahasiswaId, kelasId])
+}
+
+model Tugas {
+  id              String   @id @default(cuid())
+  dosenAjarId     String
+  title           String
+  description     String
+  deadline        DateTime
+  fileName        String?
+  filePath        String?
+  fileSize        Int?
+  fileType        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  dosenAjar   DosenAjar         @relation(fields: [dosenAjarId], references: [id], onDelete: Cascade)
+  createdBy   User               @relation("TugasCreator", fields: [dosenId], references: [id])
+  dosenId     String
+  submissions TugasSubmission[]
+}
+
+model TugasSubmission {
+  id           String   @id @default(cuid())
+  tugasId      String
+  mahasiswaId  String
+  fileName     String
+  filePath     String
+  fileSize     Int?
+  fileType     String?
+  note         String?
+  nilai        Int?
+  feedback     String?
+  submittedAt  DateTime @default(now())
+  gradedAt     DateTime?
+
+  tugas      Tugas @relation(fields: [tugasId], references: [id], onDelete: Cascade)
+  mahasiswa  User  @relation(fields: [mahasiswaId], references: [id], onDelete: Cascade)
+
+  @@unique([tugasId, mahasiswaId])
+}
+
+model Absensi {
+  id            String   @id @default(cuid())
+  dosenAjarId   String
+  tanggal       DateTime
+  pertemuan     Int      // pertemuan ke-
+  topic         String?
+  status        String   // OPEN | CLOSED | EXPIRED
+  openedAt      DateTime?
+  closedAt      DateTime?
+  expiresAt     DateTime? // auto-expiry time, null = no expiry
+  durationMin   Int?     // duration in minutes (for display)
+  createdAt     DateTime @default(now())
+
+  dosenAjar DosenAjar        @relation(fields: [dosenAjarId], references: [id], onDelete: Cascade)
+  records   AbsensiRecord[]
+}
+
+model AbsensiRecord {
+  id           String   @id @default(cuid())
+  absensiId    String
+  mahasiswaId  String
+  status       String   // HADIR | IZIN | SAKIT | ALFA
+  note         String?
+  fileName     String?  // uploaded file name (surat sakit / bukti izin)
+  filePath     String?  // file URL path
+  fileSize     Int?
+  fileType     String?
+  recordedAt   DateTime @default(now())
+
+  absensi    Absensi @relation(fields: [absensiId], references: [id], onDelete: Cascade)
+  mahasiswa  User    @relation(fields: [mahasiswaId], references: [id], onDelete: Cascade)
+
+  @@unique([absensiId, mahasiswaId])
+}
+
+model Ujian {
+  id            String   @id @default(cuid())
+  dosenAjarId   String
+  title         String
+  type          String   // UTS | UAS | QUIZ
+  description   String?
+  startTime     DateTime
+  endTime       DateTime
+  durationMin   Int      // minutes
+  status        String   // DRAFT | PUBLISHED | ONGOING | FINISHED
+  instruction   String?
+  shuffleSoal   Boolean  @default(false) // if true, randomize soal order per mahasiswa
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  dosenAjar DosenAjar       @relation(fields: [dosenAjarId], references: [id], onDelete: Cascade)
+  createdBy User             @relation("UjianCreator", fields: [dosenId], references: [id])
+  dosenId   String
+  soal      SoalUjian[]
+  sessions  UjianSession[]
+  jawaban   JawabanUjian[]
+}
+
+model SoalUjian {
+  id          String   @id @default(cuid())
+  ujianId     String
+  pertanyaan  String
+  type        String   // ESSAY | MULTIPLE_CHOICE
+  options     String?  // JSON array string for MC options
+  answerKey   String?  // correct answer (letter for MC, key points for essay)
+  points      Int
+  order       Int
+  createdAt   DateTime @default(now())
+
+  ujian    Ujian         @relation(fields: [ujianId], references: [id], onDelete: Cascade)
+  jawaban  JawabanUjian[]
+}
+
+model JawabanUjian {
+  id           String   @id @default(cuid())
+  ujianId      String
+  soalId       String
+  mahasiswaId  String
+  answer       String
+  nilai        Int?
+  catatan       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  ujian      Ujian     @relation(fields: [ujianId], references: [id], onDelete: Cascade)
+  soal       SoalUjian @relation(fields: [soalId], references: [id], onDelete: Cascade)
+  mahasiswa  User      @relation(fields: [mahasiswaId], references: [id], onDelete: Cascade)
+
+  @@unique([soalId, mahasiswaId])
+}
+
+model UjianSession {
+  id            String   @id @default(cuid())
+  ujianId       String
+  mahasiswaId   String
+  startTime     DateTime
+  endTime       DateTime
+  status        String   // NOT_STARTED | IN_PROGRESS | SUBMITTED | EXPIRED | AUTO_SUBMITTED
+  autoSubmitted Boolean  @default(false)
+  reason        String?
+  violationCount Int     @default(0)
+  lastViolation String?
+  submittedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  ujian      Ujian @relation(fields: [ujianId], references: [id], onDelete: Cascade)
+  mahasiswa  User  @relation(fields: [mahasiswaId], references: [id], onDelete: Cascade)
+
+  @@unique([ujianId, mahasiswaId])
+}
+
+model LogHistory {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  detail    String
+  level     String   @default("INFO") // INFO | WARN | ERROR
+  createdAt DateTime @default(now())
+}
