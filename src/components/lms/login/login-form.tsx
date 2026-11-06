@@ -5,22 +5,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { GraduationCap, Shield, BookOpen, Users, LogIn, AlertCircle } from 'lucide-react'
+import { GraduationCap, Shield, BookOpen, Users, LogIn, AlertCircle, Eye, EyeOff, Lock, Mail } from 'lucide-react'
 import { toast } from 'sonner'
 
-const DUMMY_ACCOUNTS = [
-  { role: 'Admin', email: 'admin@lms.id', password: 'admin123', icon: Shield, color: 'text-rose-600' },
-  { role: 'Dosen', email: 'dosen@lms.id', password: 'dosen123', icon: GraduationCap, color: 'text-emerald-600' },
-  { role: 'Mahasiswa 1', email: 'mhs1@lms.id', password: 'mhs123', icon: BookOpen, color: 'text-amber-600' },
-  { role: 'Mahasiswa 2', email: 'mhs2@lms.id', password: 'mhs123', icon: BookOpen, color: 'text-amber-600' },
-  { role: 'Mahasiswa 3', email: 'mhs3@lms.id', password: 'mhs123', icon: BookOpen, color: 'text-amber-600' },
-]
-
 export function LoginForm() {
-  const { setUser, fetchSession } = useAuthStore()
+  const { fetchSession } = useAuthStore()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -37,106 +29,108 @@ export function LoginForm() {
       })
       const data = await res.json()
       if (!res.ok) {
-        setError(data.error || 'Login gagal')
-        toast.error(data.error || 'Login gagal')
+        setError('Email atau password salah')
+        toast.error('Email atau password salah')
         return
       }
       toast.success(`Selamat datang, ${data.user.name}!`)
       await fetchSession()
     } catch (e: any) {
-      setError(e.message || 'Terjadi kesalahan')
-      toast.error(e.message || 'Terjadi kesalahan')
+      setError('Terjadi kesalahan. Silakan coba lagi.')
+      toast.error('Terjadi kesalahan. Silakan coba lagi.')
     } finally {
       setLoading(false)
     }
   }
 
-  function fillDummy(acc: typeof DUMMY_ACCOUNTS[number]) {
-    setEmail(acc.email)
-    setPassword(acc.password)
-    setError(null)
-  }
-
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-emerald-50 via-background to-amber-50 dark:from-emerald-950/30 dark:via-background dark:to-amber-950/30 p-4">
-      <div className="w-full max-w-5xl grid lg:grid-cols-2 gap-8 items-center">
-        {/* Left: Branding */}
-        <div className="hidden lg:flex flex-col gap-6 p-8">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-primary text-primary-foreground flex items-center justify-center">
-              <GraduationCap className="w-7 h-7" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold">LMS Ujian Online</h1>
-              <p className="text-sm text-muted-foreground">Sistem Manajemen Pembelajaran</p>
-            </div>
+    <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-emerald-50 via-white to-amber-50 dark:from-emerald-950/20 dark:via-black dark:to-amber-950/20 p-4">
+      {/* Background decoration */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-96 h-96 bg-emerald-200/20 dark:bg-emerald-900/10 rounded-full blur-3xl" />
+        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-amber-200/20 dark:bg-amber-900/10 rounded-full blur-3xl" />
+      </div>
+
+      <div className="w-full max-w-md relative">
+        {/* Logo + Title */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-500/25 mb-4">
+            <GraduationCap className="w-8 h-8 text-white" />
           </div>
-          <div className="space-y-4">
-            <h2 className="text-3xl font-bold leading-tight">
-              Ujian Online Aman, <span className="text-primary">Tanpa Conteakan</span>
-            </h2>
-            <p className="text-muted-foreground">
-              Platform pembelajaran terpadu dengan proteksi anti-cheating tingkat lanjut: wajib kamera, screen share, deteksi tab baru, dan auto-submit otomatis saat pelanggaran terdeteksi.
-            </p>
-            <div className="grid grid-cols-3 gap-3 pt-4">
-              <FeatureCard icon={Shield} title="Anti-Cheat" desc="Camera + Screen monitoring" />
-              <FeatureCard icon={Users} title="3 Role" desc="Admin, Dosen, Mahasiswa" />
-              <FeatureCard icon={BookOpen} title="Lengkap" desc="Tugas, Absensi, Ujian" />
-            </div>
-          </div>
+          <h1 className="text-2xl font-bold tracking-tight">LMS Ujian Online</h1>
+          <p className="text-sm text-muted-foreground mt-1">Sistem Manajemen Pembelajaran</p>
         </div>
 
-        {/* Right: Login form */}
-        <Card className="w-full max-w-md mx-auto shadow-lg">
-          <CardHeader className="space-y-1">
-            <div className="lg:hidden flex items-center gap-2 mb-2">
-              <div className="w-10 h-10 rounded-lg bg-primary text-primary-foreground flex items-center justify-center">
-                <GraduationCap className="w-6 h-6" />
-              </div>
-              <div>
-                <CardTitle className="text-lg">LMS Ujian Online</CardTitle>
-                <CardDescription>Sistem Manajemen Pembelajaran</CardDescription>
-              </div>
-            </div>
-            <CardTitle className="text-2xl">Masuk ke Akun</CardTitle>
-            <CardDescription>Masukkan email dan password untuk melanjutkan</CardDescription>
+        {/* Login Card */}
+        <Card className="shadow-xl border-border/50 backdrop-blur-sm">
+          <CardHeader className="space-y-1 pb-4">
+            <CardTitle className="text-xl font-semibold">Masuk ke Akun</CardTitle>
+            <CardDescription>Masukkan email dan password Anda</CardDescription>
           </CardHeader>
+
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
+              {/* Email */}
               <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="email@lms.id"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  autoComplete="email"
-                />
+                <Label htmlFor="email" className="text-sm font-medium">Email</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="nama@lms.id"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    autoComplete="email"
+                    className="pl-9 h-11"
+                  />
+                </div>
               </div>
+
+              {/* Password */}
               <div className="space-y-2">
-                <Label htmlFor="password">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  autoComplete="current-password"
-                />
+                <Label htmlFor="password" className="text-sm font-medium">Password</Label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    id="password"
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    autoComplete="current-password"
+                    className="pl-9 pr-9 h-11"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
+
+              {/* Error */}
               {error && (
-                <div className="flex items-center gap-2 p-3 rounded-md bg-destructive/10 text-destructive text-sm">
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/5 border border-destructive/20 text-destructive text-sm">
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />
                   <span>{error}</span>
                 </div>
               )}
-              <Button type="submit" className="w-full" disabled={loading}>
+
+              {/* Submit */}
+              <Button
+                type="submit"
+                className="w-full h-11 text-base font-medium"
+                disabled={loading}
+              >
                 {loading ? (
                   <>
-                    <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                     Memproses...
                   </>
                 ) : (
@@ -148,44 +142,35 @@ export function LoginForm() {
               </Button>
             </form>
           </CardContent>
-          <CardFooter className="flex flex-col gap-3">
-            <div className="w-full">
-              <p className="text-xs text-center text-muted-foreground mb-2">
-                Akun Demo (klik untuk auto-fill):
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                {DUMMY_ACCOUNTS.map((acc) => {
-              const Icon = acc.icon
-              return (
-                <button
-                  key={acc.email}
-                  type="button"
-                  onClick={() => fillDummy(acc)}
-                  className="flex items-center gap-2 p-2 rounded-md border border-border hover:border-primary hover:bg-accent transition-colors text-left"
-                >
-                  <Icon className={`w-4 h-4 flex-shrink-0 ${acc.color}`} />
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium truncate">{acc.role}</div>
-                    <div className="text-[10px] text-muted-foreground truncate">{acc.email}</div>
-                  </div>
-                </button>
-              )
-            })}
-              </div>
-            </div>
+
+          <CardFooter className="flex flex-col gap-3 pt-0">
+            <div className="w-full h-px bg-border/50" />
+            <p className="text-xs text-center text-muted-foreground">
+              Belum punya akun? Hubungi administrator LMS Anda.
+            </p>
           </CardFooter>
         </Card>
+
+        {/* Features */}
+        <div className="grid grid-cols-3 gap-3 mt-6">
+          <FeatureMini icon={Shield} label="Anti-Cheat" />
+          <FeatureMini icon={Users} label="4 Role" />
+          <FeatureMini icon={BookOpen} label="Lengkap" />
+        </div>
+
+        <p className="text-center text-xs text-muted-foreground mt-6">
+          © 2026 LMS Ujian Online
+        </p>
       </div>
     </div>
   )
 }
 
-function FeatureCard({ icon: Icon, title, desc }: { icon: any; title: string; desc: string }) {
+function FeatureMini({ icon: Icon, label }: { icon: any; label: string }) {
   return (
-    <div className="flex flex-col gap-1 p-3 rounded-lg bg-card border border-border">
-      <Icon className="w-5 h-5 text-primary" />
-      <div className="text-sm font-medium">{title}</div>
-      <div className="text-xs text-muted-foreground">{desc}</div>
+    <div className="flex flex-col items-center gap-1.5 p-3 rounded-lg bg-card/50 border border-border/30 backdrop-blur-sm">
+      <Icon className="w-4 h-4 text-emerald-600" />
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
     </div>
   )
 }

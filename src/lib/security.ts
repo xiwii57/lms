@@ -1,142 +1,306 @@
-// Security utilities for LMS
 import bcrypt from 'bcryptjs'
 
-const BCRYPT_ROUNDS = 10
+// ---------------------------------------------------------------------------
+// Helper
+// ---------------------------------------------------------------------------
 
-// Hash password with bcrypt
+/** Perbandingan constant-time untuk dua string. */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const enc = new TextEncoder()
+  const x = enc.encode(a)
+  const y = enc.encode(b)
+  if (x.length !== y.length) return false
+  let diff = 0
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i]
+  return diff === 0
+}
+
+// ---------------------------------------------------------------------------
+// Password
+// ---------------------------------------------------------------------------
+
+const BCRYPT_ROUNDS = 12
+
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, BCRYPT_ROUNDS)
 }
 
-// Verify password against hash
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  // Support both old plain-text and new bcrypt hashes
-  // If hash starts with $2, it's bcrypt; otherwise it's plain text (legacy)
   if (hash.startsWith('$2')) {
     return bcrypt.compare(password, hash)
   }
-  // Legacy plain text comparison (for migration)
-  return password === hash
+  // LEGACY: password plaintext. Hapus cabang ini setelah semua user termigrasi
+  // (rehash saat login berhasil, lihat needsRehash).
+  return timingSafeEqualStr(password, hash)
 }
 
-// Check if password needs rehashing (plain text → bcrypt)
+/**
+ * True jika hash masih plaintext ATAU bcrypt dengan cost lebih rendah
+ * dari BCRYPT_ROUNDS. Panggil setelah verifyPassword berhasil, lalu
+ * simpan hashPassword(password) ke DB.
+ */
 export function needsRehash(hash: string): boolean {
-  return !hash.startsWith('$2')
+  if (!hash.startsWith('$2')) return true
+  // Format bcrypt: $2a$12$<53 karakter>
+  const cost = parseInt(hash.split('$')[2], 10)
+  return Number.isNaN(cost) || cost < BCRYPT_ROUNDS
 }
 
-// Session secret from environment variable (not hardcoded!)
-// Falls back to a development-only secret
-export function getSessionSecret(): string {
-  const secret = process.env.SESSION_SECRET
-  if (!secret || secret.length < 32) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('SESSION_SECRET must be set in production environment (min 32 chars)')
-    }
-    // Development only - random per restart
-    return 'dev-only-secret-' + Math.random().toString(36).substring(2)
-  }
-  return secret
-}
-
-// Generate cryptographically secure random password
 export function generateSecurePassword(length: number = 12): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%'
-  const bytes = new Uint8Array(length)
-  crypto.getRandomValues(bytes)
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz1234567890'
+  // Rejection sampling supaya distribusi karakter merata (tanpa modulo bias)
+  const max = 256 - (256 % chars.length)
   let out = ''
-  for (let i = 0; i < length; i++) {
-    out += chars[bytes[i] % chars.length]
+  while (out.length < length) {
+    const bytes = new Uint8Array(length * 2)
+    crypto.getRandomValues(bytes)
+    for (const b of bytes) {
+      if (b < max && out.length < length) out += chars[b % chars.length]
+    }
   }
   return out
 }
 
-// Validate file type for uploads
-const ALLOWED_MIME_TYPES = [
-  'application/pdf',
-  'image/png',
-  'image/jpeg',
-  'image/jpg',
-  'image/gif',
-  'image/webp',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-powerpoint',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/zip',
-  'application/x-rar-compressed',
-  'text/plain',
-  'text/markdown',
-]
+// ---------------------------------------------------------------------------
+// Validasi file: ekstensi
+// ---------------------------------------------------------------------------
 
+// Format OLE lama (.doc, .xls, .ppt) sengaja dikeluarkan: bisa membawa macro
+// dan isinya tidak dipindai. Tambahkan kembali hanya jika benar-benar perlu.
 const ALLOWED_EXTENSIONS = [
   '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp',
-  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',  // tambah .doc .xls .ppt
   '.zip', '.rar', '.txt', '.md',
 ]
 
-const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB
+const BLOCKED_EXTENSIONS = [
+  '.php', '.php3', '.php4', '.php5', '.php7', '.phtml', '.pht',
+  '.exe', '.bat', '.cmd', '.com', '.scr', '.msi',
+  '.sh', '.bash', '.zsh', '.fish',
+  '.py', '.rb', '.pl', '.lua',
+  '.jsp', '.asp', '.aspx', '.ashx',
+  '.js', '.mjs', '.ts',
+  '.html', '.htm', '.svg',
+  '.sql', '.db', '.sqlite',
+  '.htaccess', '.htpasswd',
+  '.cgi', '.fcgi', '.jar', '.war', '.class',
+  '.dll', '.so', '.dylib',
+  '.vbs', '.vba', '.ps1', '.wsf', '.wsh', '.reg', '.lnk',
+]
+
+function getExtension(filename: string): string {
+  const dot = filename.lastIndexOf('.')
+  return dot === -1 ? '' : filename.substring(dot)
+}
 
 export function validateFile(file: File): { valid: boolean; error?: string } {
-  // Check file size
-  if (file.size > MAX_FILE_SIZE) {
-    return { valid: false, error: `File terlalu besar (max ${MAX_FILE_SIZE / 1024 / 1024}MB)` }
+  if (file.size > 50 * 1024 * 1024) {
+    return { valid: false, error: 'File terlalu besar (max 50MB)' }
   }
-
-  // Check file size (empty)
   if (file.size === 0) {
     return { valid: false, error: 'File kosong' }
   }
 
-  // Check MIME type
-  if (file.type && !ALLOWED_MIME_TYPES.includes(file.type)) {
-    // Some browsers don't set MIME type correctly, check extension as fallback
-    const ext = file.name.toLowerCase().substring(file.name.lastIndexOf('.'))
-    if (!ALLOWED_EXTENSIONS.includes(ext)) {
-      return { valid: false, error: `Tipe file tidak diizinkan: ${file.type || ext}. Gunakan: PDF, JPG, PNG, DOC, ZIP, dll.` }
+  const filename = file.name.toLowerCase()
+
+  if (filename.includes('\0') || filename.includes('%00')) {
+    return { valid: false, error: 'Nama file tidak valid' }
+  }
+
+  const ext = getExtension(filename)
+
+  if (BLOCKED_EXTENSIONS.includes(ext)) {
+    return { valid: false, error: 'Tipe file "' + ext + '" DILARANG!' }
+  }
+
+  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+    return { valid: false, error: 'Tipe file "' + ext + '" tidak diizinkan. Gunakan: PDF, JPG, PNG, DOCX, ZIP, TXT' }
+  }
+
+  // Cegah double extension, misal "shell.php.jpg"
+  const parts = filename.split('.')
+  if (parts.length > 2) {
+    for (let i = 1; i < parts.length; i++) {
+      if (BLOCKED_EXTENSIONS.includes('.' + parts[i])) {
+        return { valid: false, error: 'File mengandung ekstensi berbahaya' }
+      }
     }
   }
 
   return { valid: true }
 }
 
-// Sanitize filename to prevent path traversal
+// ---------------------------------------------------------------------------
+// Validasi file: isi (magic bytes + pola berbahaya)
+// ---------------------------------------------------------------------------
+
+interface MagicByteConfig {
+  signature: number[]
+  secondarySignature?: {
+    offset: number
+    bytes: number[]
+  }
+}
+
+const MAGIC_BYTES: Record<string, MagicByteConfig> = {
+  '.pdf':  { signature: [0x25, 0x50, 0x44, 0x46] }, // %PDF
+  '.png':  { signature: [0x89, 0x50, 0x4E, 0x47] },
+  '.jpg':  { signature: [0xFF, 0xD8, 0xFF] },
+  '.jpeg': { signature: [0xFF, 0xD8, 0xFF] },
+  '.gif':  { signature: [0x47, 0x49, 0x46, 0x38] }, // GIF8
+  '.rar':  { signature: [0x52, 0x61, 0x72, 0x21] }, // Rar!
+
+  // WebP: RIFF + "WEBP" di offset 8 (agar tidak bentrok dengan .wav/.avi)
+  '.webp': {
+    signature: [0x52, 0x49, 0x46, 0x46], // RIFF
+    secondarySignature: {
+      offset: 8,
+      bytes: [0x57, 0x45, 0x42, 0x50], // WEBP
+    },
+  },
+
+  // Kontainer ZIP (ZIP, DOCX, XLSX, PPTX)
+  '.zip':  { signature: [0x50, 0x4B, 0x03, 0x04] },
+  '.docx': { signature: [0x50, 0x4B, 0x03, 0x04] },
+  '.xlsx': { signature: [0x50, 0x4B, 0x03, 0x04] },
+  '.pptx': { signature: [0x50, 0x4B, 0x03, 0x04] },
+}
+
+const DANGEROUS_PATTERNS = [
+  '<?php', '<?=', 'eval(', 'base64_decode(',
+  'system(', 'exec(', 'passthru(', 'shell_exec(',
+  'popen(', 'proc_open(', 'assert(',
+  '<script', 'document.cookie',
+]
+
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp']
+const SCAN_BYTES = 51200 // 50KB di awal dan di akhir file
+
+function containsDangerousPattern(text: string): string | null {
+  const lower = text.toLowerCase()
+  for (const pattern of DANGEROUS_PATTERNS) {
+    if (lower.includes(pattern.toLowerCase())) return pattern
+  }
+  return null
+}
+
+export async function validateFileContent(file: File): Promise<{ valid: boolean; error?: string }> {
+  // Selalu jalankan validasi ekstensi/ukuran lebih dulu (allowlist)
+  const basic = validateFile(file)
+  if (!basic.valid) return basic
+
+  const ext = getExtension(file.name.toLowerCase())
+
+  // 1. Magic bytes
+  const config = MAGIC_BYTES[ext]
+  if (config) {
+    const header = new Uint8Array(await file.slice(0, 16).arrayBuffer())
+
+    for (let i = 0; i < config.signature.length; i++) {
+      if (header[i] !== config.signature[i]) {
+        return { valid: false, error: 'Isi file tidak cocok dengan extension "' + ext + '". File mungkin dipalsukan.' }
+      }
+    }
+
+    if (config.secondarySignature) {
+      const { offset, bytes } = config.secondarySignature
+      for (let i = 0; i < bytes.length; i++) {
+        if (header[offset + i] !== bytes[i]) {
+          return { valid: false, error: 'Struktur isi file internal tidak valid untuk ekstensi "' + ext + '".' }
+        }
+      }
+    }
+  }
+
+  // 2. Gambar: cek kode tersembunyi di awal DAN akhir file
+  //    (payload sering ditempel setelah data gambar valid)
+  if (IMAGE_EXTENSIONS.includes(ext)) {
+    const head = await file.slice(0, Math.min(file.size, SCAN_BYTES)).text()
+    const tail = await file.slice(Math.max(0, file.size - SCAN_BYTES)).text()
+    if (containsDangerousPattern(head) || containsDangerousPattern(tail)) {
+      return { valid: false, error: 'File gambar mengandung kode berbahaya.' }
+    }
+  }
+
+  // File .txt/.md tidak dipindai: tidak dieksekusi, dan pemindaian hanya
+  // menolak catatan/kode yang sah. Pastikan disajikan sebagai text/plain
+  // atau attachment di sisi penyimpanan.
+
+  return { valid: true }
+}
+
+// ---------------------------------------------------------------------------
+// Nama file
+// ---------------------------------------------------------------------------
+
+/** Membersihkan nama file asli (untuk ditampilkan / disimpan di DB). */
 export function sanitizeFilename(filename: string): string {
-  // Remove any path components
-  const safe = filename.replace(/[^a-zA-Z0-9.\-]/g, '_')
-  // Limit length
-  return safe.substring(0, 100)
+  const clean = filename.replace(/\0/g, '')
+  const dot = clean.lastIndexOf('.')
+  const ext = dot > -1
+    ? clean.slice(dot).toLowerCase().replace(/[^a-z0-9.]/g, '')
+    : ''
+  const base = (dot > -1 ? clean.slice(0, dot) : clean)
+    .replace(/[^a-zA-Z0-9\-]/g, '_')
+    .slice(0, 80)
+  return (base || 'file') + ext
 }
 
-// Rate limiting (simple in-memory)
-interface RateLimitEntry {
-  count: number
-  resetTime: number
+/** Nama acak untuk disimpan di storage. Simpan nama asli di database. */
+export function generateStorageFilename(originalName: string): string {
+  const ext = getExtension(sanitizeFilename(originalName).toLowerCase())
+  return crypto.randomUUID() + ext
 }
 
+// ---------------------------------------------------------------------------
+// Rate limit
+// ---------------------------------------------------------------------------
+// PERHATIAN: Map in-memory ini TIDAK efektif di serverless (Vercel): state
+// hilang saat cold start dan tidak dibagi antar instance. Untuk production
+// pindahkan ke Upstash Redis / tabel Supabase. Pastikan `identifier` berasal
+// dari IP yang tidak bisa dipalsukan atau dari user ID.
+
+interface RateLimitEntry { count: number; resetTime: number }
+
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
+const RATE_LIMIT_MAX = 10
 const rateLimitMap = new Map<string, RateLimitEntry>()
-const RATE_LIMIT_WINDOW = 15 * 60 * 1000 // 15 minutes
-const RATE_LIMIT_MAX_REQUESTS = 10 // max 10 attempts per IP per window
+
+function sweepRateLimit(now: number) {
+  for (const [key, entry] of rateLimitMap) {
+    if (now > entry.resetTime) rateLimitMap.delete(key)
+  }
+}
 
 export function checkRateLimit(identifier: string): { allowed: boolean; remaining: number; resetIn: number } {
   const now = Date.now()
-  const entry = rateLimitMap.get(identifier)
 
+  // Bersihkan entri kadaluarsa agar Map tidak membengkak
+  if (rateLimitMap.size > 1000) sweepRateLimit(now)
+
+  const entry = rateLimitMap.get(identifier)
   if (!entry || now > entry.resetTime) {
-    rateLimitMap.set(identifier, { count: 1, resetTime: now + RATE_LIMIT_WINDOW })
-    return { allowed: true, remaining: RATE_LIMIT_MAX_REQUESTS - 1, resetIn: RATE_LIMIT_WINDOW }
+    rateLimitMap.set(identifier, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS })
+    return { allowed: true, remaining: RATE_LIMIT_MAX - 1, resetIn: RATE_LIMIT_WINDOW_MS }
   }
 
   entry.count++
-  if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
+  if (entry.count > RATE_LIMIT_MAX) {
     return { allowed: false, remaining: 0, resetIn: entry.resetTime - now }
   }
-
-  return { allowed: true, remaining: RATE_LIMIT_MAX_REQUESTS - entry.count, resetIn: entry.resetTime - now }
+  return { allowed: true, remaining: RATE_LIMIT_MAX - entry.count, resetIn: entry.resetTime - now }
 }
 
-// CSRF token generation
+// ---------------------------------------------------------------------------
+// CSRF
+// ---------------------------------------------------------------------------
+
 export function generateCSRFToken(): string {
   return crypto.randomUUID() + crypto.randomUUID()
+}
+
+/** Bandingkan token dari request dengan token yang tersimpan di sesi. */
+export function verifyCSRFToken(provided: string | null | undefined, expected: string | null | undefined): boolean {
+  if (!provided || !expected) return false
+  return timingSafeEqualStr(provided, expected)
 }

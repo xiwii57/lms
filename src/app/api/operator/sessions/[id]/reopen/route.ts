@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { db } from '@/lib/db'
 import { logAction } from '@/lib/logger'
-import { deleteCapture } from '@/lib/capture-store'
 
 // POST - reopen a single auto-submitted/expired session
 export async function POST(
@@ -43,7 +42,7 @@ export async function POST(
       },
     })
 
-    deleteCapture(id)
+    // deleteCapture(id)
     await logAction(session.id, 'REOPEN_SESSION', `Operator membuka kembali sesi ${id} (${ujianSession.ujian.title})`, 'INFO')
 
     return NextResponse.json({ session: updated, remainingMin: Math.round(remaining / 60000) })

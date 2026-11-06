@@ -6,8 +6,9 @@ import { logAction } from '@/lib/logger'
 export async function GET(req: NextRequest) {
   try {
     const session = await getSession()
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    if (session.role !== 'DOSEN') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!session || session.role !== 'DOSEN') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
     const { searchParams } = new URL(req.url)
     const dosenAjarId = searchParams.get('dosenAjarId')
@@ -19,14 +20,11 @@ export async function GET(req: NextRequest) {
     const dosenAjarIds = dosenAjarList.map((d) => d.id)
 
     const where: any = { dosenAjarId: { in: dosenAjarIds } }
-    if (dosenAjarId) {
-      if (!dosenAjarIds.includes(dosenAjarId)) {
-        return NextResponse.json({ error: 'dosenAjar tidak milik dosen ini' }, { status: 403 })
-      }
+    if (dosenAjarId && dosenAjarIds.includes(dosenAjarId)) {
       where.dosenAjarId = dosenAjarId
     }
 
-    // Auto-expire: mark OPEN sessions past expiresAt as EXPIRED
+    // Auto-expire
     const now = new Date()
     const openSessions = await db.absensi.findMany({
       where: { ...where, status: 'OPEN' },
@@ -46,9 +44,7 @@ export async function GET(req: NextRequest) {
       where,
       orderBy: [{ tanggal: 'desc' }, { pertemuan: 'asc' }],
       include: {
-        dosenAjar: {
-          include: { mataKuliah: true, kelas: true },
-        },
+        dosenAjar: { include: { mataKuliah: true, kelas: true } },
         _count: { select: { records: true } },
       },
     })
@@ -62,16 +58,14 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const session = await getSession()
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    if (session.role !== 'DOSEN') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!session || session.role !== 'DOSEN') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
     const body = await req.json()
     const { dosenAjarId, tanggal, pertemuan, topic, durationMin } = body
     if (!dosenAjarId || !tanggal || pertemuan === undefined) {
-      return NextResponse.json(
-        { error: 'dosenAjarId, tanggal, pertemuan wajib diisi' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: 'dosenAjarId, tanggal, pertemuan wajib diisi' }, { status: 400 })
     }
 
     const da = await db.dosenAjar.findUnique({ where: { id: dosenAjarId } })
@@ -85,32 +79,19 @@ export async function POST(req: NextRequest) {
     }
 
     const now = new Date()
-    // Calculate expiresAt from durationMin (default 60 min if not provided)
     const dur = Number(durationMin) || 60
     const expiresAt = new Date(now.getTime() + dur * 60 * 1000)
 
     const absensi = await db.absensi.create({
       data: {
-        dosenAjarId,
-        tanggal: tanggalDate,
-        pertemuan: Number(pertemuan),
-        topic: topic || null,
-        status: 'OPEN',
-        openedAt: now,
-        expiresAt,
-        durationMin: dur,
+        dosenAjarId, tanggal: tanggalDate, pertemuan: Number(pertemuan),
+        topic: topic || null, status: 'OPEN', openedAt: now,
+        expiresAt, durationMin: dur,
       },
-      include: {
-        dosenAjar: { include: { mataKuliah: true, kelas: true } },
-      },
+      include: { dosenAjar: { include: { mataKuliah: true, kelas: true } } },
     })
 
-    await logAction(
-      session.id,
-      'CREATE_ABSENSI',
-      `Open absensi pertemuan ${absensi.pertemuan} for dosenAjar ${dosenAjarId} (auto-expire in ${dur} min)`,
-      'INFO'
-    )
+    await logAction(session.id, 'CREATE_ABSENSI', `Open absensi pertemuan ${absensi.pertemuan} (${dur} min expiry)`, 'INFO')
     return NextResponse.json({ absensi })
   } catch (e: any) {
     return NextResponse.json({ error: e.message || 'Server error' }, { status: 500 })

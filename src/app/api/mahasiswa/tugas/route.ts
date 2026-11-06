@@ -1,89 +1,47 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { db } from '@/lib/db'
-import { logAction } from '@/lib/logger'
-import { writeFile, mkdir } from 'fs/promises'
-import path from 'path'
-import { validateFile, sanitizeFilename } from '@/lib/security'
 
-// Submit a tugas (upload file jawaban)
-export async function POST(req: NextRequest) {
-  const session = await getSession()
-  if (!session || session.role !== 'MAHASISWA') {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+export async function GET() {
   try {
-    const formData = await req.formData()
-    const tugasId = formData.get('tugasId') as string
-    const note = (formData.get('note') as string) || ''
-    const file = formData.get('file') as File
-
-    if (!tugasId || !file) {
-      return NextResponse.json({ error: 'tugasId dan file wajib diisi' }, { status: 400 })
+    const session = await getSession()
+    if (!session || session.role !== 'MAHASISWA') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
-
-    // Verify tugas belongs to mahasiswa's kelas
-    const tugas = await db.tugas.findUnique({
-      where: { id: tugasId },
-      include: { dosenAjar: { include: { kelas: true } } },
+    const mhsKelas = await db.mahasiswaKelas.findMany({
+      where: { mahasiswaId: session.id },
+      select: { kelasId: true },
     })
-    if (!tugas) {
-      return NextResponse.json({ error: 'Tugas tidak ditemukan' }, { status: 404 })
+    const kelasIds = mhsKelas.map((mk) => mk.kelasId)
+
+    if (kelasIds.length === 0) {
+      return NextResponse.json({ tugas: [] })
     }
 
-    // Check deadline - prevent upload after deadline
-    const now = new Date()
-    if (new Date(tugas.deadline) < now) {
-      return NextResponse.json({ error: 'Tugas telah berakhir — deadline sudah lewat. Upload tidak diperbolehkan.' }, { status: 400 })
-    }
-    const mhsKelas = await db.mahasiswaKelas.findFirst({
-      where: { mahasiswaId: session.id, kelasId: tugas.dosenAjar.kelasId },
+    const dosenAjar = await db.dosenAjar.findMany({
+      where: { kelasId: { in: kelasIds } },
+      select: { id: true },
     })
-    if (!mhsKelas) {
-      return NextResponse.json({ error: 'Anda tidak terdaftar di kelas ini' }, { status: 403 })
+    const dosenAjarIds = dosenAjar.map((da) => da.id)
+
+    if (dosenAjarIds.length === 0) {
+      return NextResponse.json({ tugas: [] })
     }
 
-    // Validate file (server-side)
-    const fileValidation = validateFile(file)
-    if (!fileValidation.valid) {
-      return NextResponse.json({ error: fileValidation.error }, { status: 400 })
-    }
-
-    // Save file
-    const uploadDir = '/home/z/my-project/uploads/submissions'
-    await mkdir(uploadDir, { recursive: true })
-    const safeName = sanitizeFilename(file.name)
-    const fileName = `${Date.now()}-${session.id}-${safeName}`
-    const filePath = path.join(uploadDir, fileName)
-    const bytes = await file.arrayBuffer()
-    await writeFile(filePath, Buffer.from(bytes))
-
-    // Upsert submission
-    const submission = await db.tugasSubmission.upsert({
-      where: { tugasId_mahasiswaId: { tugasId, mahasiswaId: session.id } },
-      update: {
-        fileName: file.name,
-        filePath: `/uploads/submissions/${fileName}`,
-        fileSize: file.size,
-        fileType: file.type,
-        note,
-        submittedAt: new Date(),
+    const tugas = await db.tugas.findMany({
+      where: { dosenAjarId: { in: dosenAjarIds } },
+      include: {
+        dosenAjar: {
+          include: { mataKuliah: true, kelas: true, dosen: { select: { name: true } } },
+        },
+        submissions: { where: { mahasiswaId: session.id } },
       },
-      create: {
-        tugasId,
-        mahasiswaId: session.id,
-        fileName: file.name,
-        filePath: `/uploads/submissions/${fileName}`,
-        fileSize: file.size,
-        fileType: file.type,
-        note,
-      },
+      orderBy: { deadline: 'asc' },
     })
 
-    await logAction(session.id, 'SUBMIT_TUGAS', `Submit tugas "${tugas.title}"`, 'INFO')
-
-    return NextResponse.json({ submission })
+    return NextResponse.json({ tugas })
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || 'Upload gagal' }, { status: 500 })
+    console.error('Tugas API error:', e)
+    return NextResponse.json({ error: e.message || 'Gagal memuat tugas' }, { status: 500 })
   }
 }

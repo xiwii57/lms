@@ -1,18 +1,36 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { db } from '@/lib/db'
-import { getAllCaptures } from '@/lib/capture-store'
 
-// GET - list all active exam sessions with captures
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = await getSession()
   if (!session || session.role !== 'OPERATOR') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
   try {
-    // Get all sessions that are IN_PROGRESS or AUTO_SUBMITTED
+    const { searchParams } = new URL(req.url)
+    const search = searchParams.get('search')?.trim() || ''
+
+    let where: any = { status: { in: ['IN_PROGRESS', 'AUTO_SUBMITTED', 'SUBMITTED', 'EXPIRED'] } }
+    if (search) {
+      where = {
+        AND: [
+          { status: { in: ['IN_PROGRESS', 'AUTO_SUBMITTED', 'SUBMITTED', 'EXPIRED'] } },
+          {
+            OR: [
+              { mahasiswa: { name: { contains: search, mode: 'insensitive' } } },
+              { mahasiswa: { nim: { contains: search, mode: 'insensitive' } } },
+              { mahasiswa: { email: { contains: search, mode: 'insensitive' } } },
+              { ujian: { title: { contains: search, mode: 'insensitive' } } },
+              { ujian: { dosenAjar: { mataKuliah: { name: { contains: search, mode: 'insensitive' } } } } },
+            ]
+          }
+        ]
+      }
+    }
+
     const sessions = await db.ujianSession.findMany({
-      where: { status: { in: ['IN_PROGRESS', 'AUTO_SUBMITTED', 'SUBMITTED', 'EXPIRED'] } },
+      where,
       include: {
         mahasiswa: { select: { id: true, name: true, nim: true, email: true } },
         ujian: {
@@ -25,22 +43,9 @@ export async function GET() {
       orderBy: { startTime: 'desc' },
     })
 
-    // Merge with captures (only metadata, NOT base64 frames)
-    const captures = getAllCaptures()
-    const capturesMap = new Map(captures.map(c => [c.sessionId, c]))
-
-    const enriched = sessions.map(s => {
-      const cap = capturesMap.get(s.id)
-      return {
-        ...s,
-        hasCapture: !!cap,
-        captureTime: cap?.timestamp || null,
-        isLive: cap ? (Date.now() - cap.timestamp < 15000) : false,
-      }
-    })
-
-    return NextResponse.json({ sessions: enriched })
+    return NextResponse.json({ sessions })
   } catch (e: any) {
+    console.error('Operator sessions error:', e)
     return NextResponse.json({ error: e.message || 'Server error' }, { status: 500 })
   }
 }

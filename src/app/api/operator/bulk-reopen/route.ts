@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { db } from '@/lib/db'
 import { logAction } from '@/lib/logger'
-import { deleteCapture } from '@/lib/capture-store'
 
 // POST - bulk reopen all auto-submitted/expired sessions
 export async function POST() {
@@ -39,7 +38,6 @@ export async function POST() {
           endTime: newEndTime,
         },
       })
-      deleteCapture(s.id)
       reopenedCount++
     }
 

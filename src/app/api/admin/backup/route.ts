@@ -1,7 +1,6 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
-import { readFile } from 'fs/promises'
-import path from 'path'
+import { db } from '@/lib/db'
 import { logAction } from '@/lib/logger'
 
 export async function GET() {
@@ -10,30 +9,36 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
   try {
-    const dbUrl = process.env.DATABASE_URL || ''
-    let filePath = dbUrl.replace(/^file:/, '')
-    if (filePath.startsWith('./')) {
-      filePath = filePath.substring(2)
+    const [users, prodi, kelas, mataKuliah, dosenAjar, mahasiswaKelas, tugas, tugasSubmissions, absensi, absensiRecords, ujian, soalUjian, jawabanUjian, ujianSessions, logHistory] = await Promise.all([
+      db.user.findMany({ select: { id: true, email: true, name: true, role: true, nip: true, nim: true, phone: true, createdAt: true } }),
+      db.prodi.findMany(),
+      db.kelas.findMany(),
+      db.mataKuliah.findMany(),
+      db.dosenAjar.findMany(),
+      db.mahasiswaKelas.findMany(),
+      db.tugas.findMany({ select: { id: true, dosenAjarId: true, dosenId: true, title: true, description: true, deadline: true, fileName: true, fileSize: true, fileType: true, createdAt: true } }),
+      db.tugasSubmission.findMany({ select: { id: true, tugasId: true, mahasiswaId: true, fileName: true, fileSize: true, fileType: true, note: true, nilai: true, feedback: true, submittedAt: true, gradedAt: true } }),
+      db.absensi.findMany(),
+      db.absensiRecord.findMany(),
+      db.ujian.findMany(),
+      db.soalUjian.findMany(),
+      db.jawabanUjian.findMany(),
+      db.ujianSession.findMany(),
+      db.logHistory.findMany(),
+    ])
+
+    const backup = {
+      _meta: { exportedAt: new Date().toISOString(), version: '1.0', tables: 15 },
+      data: { users, prodi, kelas, mataKuliah, dosenAjar, mahasiswaKelas, tugas, tugasSubmissions, absensi, absensiRecords, ujian, soalUjian, jawabanUjian, ujianSessions, logHistory },
     }
-    const absolutePath = path.isAbsolute(filePath)
-      ? filePath
-            : path.join(/*turbopackIgnore: true*/ process.cwd(), filePath)
 
-    const data = await readFile(absolutePath)
+    await logAction(session.id, 'BACKUP_DATABASE', `Exported backup (${JSON.stringify(backup).length} bytes)`, 'INFO')
+    const filename = `lms-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
 
-    await logAction(session.id, 'BACKUP_DATABASE', `Downloaded database backup (${data.length} bytes)`, 'INFO')
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const filename = `lms-backup-${timestamp}.db`
-
-    return new NextResponse(data, {
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Content-Length': String(data.length),
-      },
+    return new NextResponse(JSON.stringify(backup, null, 2), {
+      headers: { 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="${filename}"` },
     })
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || 'Gagal backup database' }, { status: 500 })
+    return NextResponse.json({ error: e.message || 'Gagal backup' }, { status: 500 })
   }
 }

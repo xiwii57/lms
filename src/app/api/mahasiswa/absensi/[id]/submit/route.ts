@@ -4,13 +4,8 @@ import { db } from '@/lib/db'
 import { logAction } from '@/lib/logger'
 import { writeFile, mkdir } from 'fs/promises'
 import path from 'path'
-import { validateFile, sanitizeFilename } from '@/lib/security'
+import { validateFile, validateFileContent, sanitizeFilename } from '@/lib/security'
 
-// POST - mahasiswa submit absen with optional file (surat sakit / bukti izin)
-// Body: FormData with fields:
-//   - status: 'HADIR' | 'IZIN' | 'SAKIT'
-//   - note?: string
-//   - file?: File (required for SAKIT, optional for IZIN)
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -22,19 +17,16 @@ export async function POST(
   try {
     const { id } = await params
     const formData = await req.formData()
-    const status = formData.get('status') as string || 'HADIR'
+    const status = formData.get('status') as string || 'IZIN'
     const note = (formData.get('note') as string) || null
     const file = formData.get('file') as File | null
 
-    if (!['HADIR', 'IZIN', 'SAKIT'].includes(status)) {
-      return NextResponse.json({ error: 'Status tidak valid' }, { status: 400 })
+    if (!['IZIN', 'SAKIT'].includes(status)) {
+      return NextResponse.json({ error: 'Status tidak valid. Gunakan Izin atau Sakit.' }, { status: 400 })
     }
 
-    // SAKIT wajib upload surat dokter
     if (status === 'SAKIT' && !file) {
-      return NextResponse.json({
-        error: 'Untuk status Sakit, wajib upload surat dokter (foto/pdf)'
-      }, { status: 400 })
+      return NextResponse.json({ error: 'Untuk Sakit, wajib upload surat dokter' }, { status: 400 })
     }
 
     const absensi = await db.absensi.findUnique({
@@ -45,19 +37,11 @@ export async function POST(
       return NextResponse.json({ error: 'Sesi absen tidak ditemukan' }, { status: 404 })
     }
 
-    // Check expiry - both status and expiresAt
     const now = new Date()
-    const isExpired = absensi.status === 'CLOSED' ||
-      absensi.status === 'EXPIRED' ||
+    const isExpired = absensi.status === 'CLOSED' || absensi.status === 'EXPIRED' ||
       (absensi.expiresAt && new Date(absensi.expiresAt) < now)
     if (isExpired) {
-      const reason = absensi.status === 'EXPIRED' || (absensi.expiresAt && new Date(absensi.expiresAt) < now)
-        ? 'sesi absen berakhir (waktu habis)'
-        : 'sesi absen sudah ditutup dosen'
-      return NextResponse.json({ error: reason }, { status: 400 })
-    }
-    if (absensi.status !== 'OPEN') {
-      return NextResponse.json({ error: 'Sesi absen sudah ditutup' }, { status: 400 })
+      return NextResponse.json({ error: 'Sesi absen berakhir' }, { status: 400 })
     }
 
     const mhsKelas = await db.mahasiswaKelas.findFirst({
@@ -71,21 +55,25 @@ export async function POST(
       where: { absensiId_mahasiswaId: { absensiId: id, mahasiswaId: session.id } },
     })
     if (existing) {
-      return NextResponse.json({ error: 'Anda sudah absen untuk sesi ini', record: existing }, { status: 400 })
+      return NextResponse.json({ error: 'Anda sudah absen untuk sesi ini' }, { status: 400 })
     }
 
-    // Save uploaded file if present
     let fileName: string | null = null
     let filePath: string | null = null
     let fileSize: number | null = null
     let fileType: string | null = null
+
     if (file) {
-      // Validate file (server-side)
       const fileValidation = validateFile(file)
       if (!fileValidation.valid) {
         return NextResponse.json({ error: fileValidation.error }, { status: 400 })
       }
-      const uploadDir = '/home/z/my-project/uploads/absensi'
+      const contentValidation = await validateFileContent(file)
+      if (!contentValidation.valid) {
+        return NextResponse.json({ error: contentValidation.error }, { status: 400 })
+      }
+
+      const uploadDir = path.join(process.cwd(), 'uploads', 'absensi')
       await mkdir(uploadDir, { recursive: true })
       const safeName = sanitizeFilename(file.name)
       const uniqueName = `${Date.now()}-${session.id}-${safeName}`
@@ -99,20 +87,10 @@ export async function POST(
     }
 
     const record = await db.absensiRecord.create({
-      data: {
-        absensiId: id,
-        mahasiswaId: session.id,
-        status,
-        note,
-        fileName,
-        filePath,
-        fileSize,
-        fileType,
-      },
+      data: { absensiId: id, mahasiswaId: session.id, status, note, fileName, filePath, fileSize, fileType },
     })
 
     await logAction(session.id, 'SUBMIT_ABSENSI', `Absen ${status} untuk pertemuan ${absensi.pertemuan}${file ? ' (with file)' : ''}`, 'INFO')
-
     return NextResponse.json({ record })
   } catch (e: any) {
     return NextResponse.json({ error: e.message || 'Gagal submit absen' }, { status: 500 })

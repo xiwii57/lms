@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   ClipboardCheck, Plus, RefreshCw, Trash2, AlertCircle, Eye,
-  Lock, Save, Users, FileText, Download, Timer,
+  Lock, Save, Users, FileText, Download, Timer, QrCode,
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -486,6 +486,40 @@ export function DosenAbsensi() {
               {detail ? `${detail.dosenAjar.mataKuliah.code} · ${detail.dosenAjar.kelas.name} — Pertemuan ${detail.pertemuan} (${formatDate(detail.tanggal)})` : 'Memuat...'}
             </DialogDescription>
           </DialogHeader>
+
+          {/* QR Code - show when session is OPEN */}
+          {detail && detail.status === 'OPEN' && (
+            <div className="flex flex-col items-center gap-2 p-4 rounded-md bg-muted/30 border">
+              <div className="text-sm font-medium flex items-center gap-2">
+                <QrCode className="w-4 h-4 text-primary" />
+                QR Code Absensi
+              </div>
+              <p className="text-xs text-muted-foreground text-center">
+                Tampilkan QR ini ke mahasiswa yang hadir di kelas.
+                {detail.expiresAt && (
+                  <span className="block mt-1 text-amber-600">
+                    Berakhir: {formatDateTime(detail.expiresAt)}
+                  </span>
+                )}
+              </p>
+              <img
+                src={'/api/dosen/absensi/' + detail.id + '/qr?t=' + Date.now()}
+                alt="QR Code"
+                className="w-48 h-48 border rounded-lg bg-white p-2"
+              />
+              <Button variant="outline" size="sm"
+                onClick={() => {
+                  const link = document.createElement('a')
+                  link.href = '/api/dosen/absensi/' + detail.id + '/qr'
+                  link.download = 'qr-absensi-pertemuan-' + detail.pertemuan + '.png'
+                  link.click()
+                }}
+              >
+                <Download className="w-3.5 h-3.5 mr-1" />
+                Download QR
+              </Button>
+            </div>
+          )}
 
           {/* Summary */}
           {detail && (
