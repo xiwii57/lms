@@ -7,7 +7,16 @@ import { Progress } from '@/components/ui/progress'
 import { Textarea } from '@/components/ui/textarea'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Label } from '@/components/ui/label'
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Shield, Clock, Send, CheckCircle, AlertTriangle, Eye, ChevronLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAntiCheat } from './use-anti-cheat'
@@ -42,6 +51,44 @@ interface ExamRunnerProps {
 
 type Phase = 'intro' | 'running' | 'submitting' | 'submitted'
 
+// ==========================================================================
+// HELPER: Request fullscreen cross-browser
+// ==========================================================================
+async function requestFullscreenCrossBrowser(): Promise<void> {
+  const el = document.documentElement as any
+  const fn =
+    el.requestFullscreen ||
+    el.webkitRequestFullscreen ||
+    el.msRequestFullscreen ||
+    el.mozRequestFullScreen
+  if (fn) {
+    try {
+      await fn.call(el)
+    } catch {
+      /* user may decline, ignore */
+    }
+  }
+}
+
+// ==========================================================================
+// HELPER: Exit fullscreen cross-browser
+// ==========================================================================
+function exitFullscreenCrossBrowser(): void {
+  const d = document as any
+  const fn =
+    document.exitFullscreen ||
+    d.webkitExitFullscreen ||
+    d.msExitFullscreen ||
+    d.mozCancelFullScreen
+  if (fn) {
+    try {
+      fn.call(document)
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
   const [phase, setPhase] = useState<Phase>('intro')
   const [soal, setSoal] = useState<Soal[]>([])
@@ -52,63 +99,134 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false)
   const [currentSoalIdx, setCurrentSoalIdx] = useState(0)
   const [violationWarning, setViolationWarning] = useState<string | null>(null)
-  const saveTimerRef = useRef<Record<string, number>>({})
   const submittedRef = useRef(false)
 
-  // Handle violation - auto submit
-  const handleViolation = useCallback(async (v: any) => {
-    if (submittedRef.current) return
-    submittedRef.current = true
-    setViolationWarning(v.detail)
-    setPhase('submitting')
-    setSubmitReason(v.detail)
-    toast.error(`PELANGGARAN: ${v.detail}`)
+  // ==========================================================================
+  // AUTO-SAVE BATCH OPTIMASI
+  // ==========================================================================
+  // Ref ke answers terbaru (untuk akses dalam interval tanpa re-create interval)
+  const answersRef = useRef<Record<string, string>>({})
+  // Track jawaban yang dirty (berubah sejak save terakhir)
+  const dirtyAnswersRef = useRef<Set<string>>(new Set())
+  // Track apakah save sedang in-flight
+  const savingRef = useRef(false)
+
+  // Update answersRef setiap kali answers berubah
+  useEffect(() => {
+    answersRef.current = answers
+  }, [answers])
+
+  // Batch auto-save setiap 5 detik — kirim hanya jawaban yang berubah
+  const flushAutoSave = useCallback(async () => {
+    if (savingRef.current) return
+    const dirty = dirtyAnswersRef.current
+    if (dirty.size === 0) return
+
+    const ujianId = ujian.id
+    // Ambil snapshot jawaban dirty, lalu clear set dirty
+    const payload = Array.from(dirty).map((soalId) => ({
+      soalId,
+      answer: answersRef.current[soalId] ?? '',
+    }))
+    dirty.clear()
+    savingRef.current = true
 
     try {
-      await Promise.all(
-        Object.entries(answers).map(([soalId, answer]) =>
-          fetch('/api/mahasiswa/ujian/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ ujianId: ujian.id, soalId, answer }),
-          }).catch(() => null)
-        )
-      )
-    } catch {}
-
-    try {
-      await fetch('/api/mahasiswa/ujian/submit', {
+      await fetch('/api/mahasiswa/ujian/save-batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ ujianId: ujian.id, reason: v.detail, violationType: v.type }),
+        body: JSON.stringify({ ujianId, answers: payload }),
       })
-    } catch {}
+    } catch {
+      // Kalau gagal, kembalikan ke dirty set supaya save di retry
+      payload.forEach((p) => dirtyAnswersRef.current.add(p.soalId))
+    } finally {
+      savingRef.current = false
+    }
+  }, [ujian.id])
 
-    try {
-      await fetch('/api/mahasiswa/ujian/violation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ ujianId: ujian.id, type: v.type, detail: v.detail }),
-      })
-    } catch {}
+  // Jalankan auto-save setiap 5 detik saat phase = running
+  useEffect(() => {
+    if (phase !== 'running') return
+    const interval = setInterval(flushAutoSave, 5000)
+    // Flush saat unload juga
+    const handleBeforeUnload = () => flushAutoSave()
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      // Final flush saat exit running phase
+      flushAutoSave()
+    }
+  }, [phase, flushAutoSave])
 
-    setTimeout(() => setPhase('submitted'), 2000)
-  }, [answers, ujian.id])
+  // ==========================================================================
+  // HANDLE VIOLATION — auto submit dengan inline answers (1 request saja)
+  // ==========================================================================
+  const handleViolation = useCallback(
+    async (v: any) => {
+      if (submittedRef.current) return
+      submittedRef.current = true
+      setViolationWarning(v.detail)
+      setPhase('submitting')
+      setSubmitReason(v.detail)
+      toast.error(`PELANGGARAN: ${v.detail}`)
 
-  // Anti-cheat: tab switch + window blur + keyboard shortcuts (NO camera/screen)
+      // Kumpulkan semua jawaban untuk inline submit
+      const allAnswers = Object.entries(answersRef.current).map(([soalId, answer]) => ({
+        soalId,
+        answer,
+      }))
+
+      // 1 request: submit + inline answers
+      try {
+        await fetch('/api/mahasiswa/ujian/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            ujianId: ujian.id,
+            reason: v.detail,
+            violationType: v.type,
+            answers: allAnswers,
+          }),
+        })
+      } catch {
+        /* best effort */
+      }
+
+      // 1 request: log violation (terpisah supaya submit tidak gagal kalau log error)
+      try {
+        await fetch('/api/mahasiswa/ujian/violation', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ ujianId: ujian.id, type: v.type, detail: v.detail }),
+        })
+      } catch {
+        /* ignore */
+      }
+
+      exitFullscreenCrossBrowser()
+      setTimeout(() => setPhase('submitted'), 2000)
+    },
+    [ujian.id],
+  )
+
+  // ==========================================================================
+  // ANTI-CHEAT HOOK (cross-browser, Android 7+, iOS)
+  // ==========================================================================
   useAntiCheat({
     enabled: phase === 'running',
     onViolation: handleViolation,
-    requireCamera: false,
-    requireScreenShare: false,
-    cameraStream: null,
-    screenStream: null,
+    detectSplitScreen: true,
+    enforceFullscreen: true,
   })
 
-  // Start exam
+  // ==========================================================================
+  // START EXAM
+  // ==========================================================================
   async function handleStart() {
     try {
       const res = await fetch('/api/mahasiswa/ujian/start', {
@@ -129,60 +247,67 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
         if (s.existingAnswer) ans[s.id] = s.existingAnswer
       })
       setAnswers(ans)
+      answersRef.current = ans
+      dirtyAnswersRef.current.clear()
       setPhase('running')
       toast.success('Ujian dimulai - jangan tinggalkan halaman ini!')
 
-      // Request fullscreen
-      try {
-        if (document.documentElement.requestFullscreen) {
-          await document.documentElement.requestFullscreen()
-        }
-      } catch {}
+      // Request fullscreen (cross-browser)
+      await requestFullscreenCrossBrowser()
     } catch (e: any) {
       toast.error(e.message || 'Gagal memulai ujian')
     }
   }
 
-  // Manual submit
-  const handleSubmitFinal = useCallback(async (reason?: string) => {
-    if (submittedRef.current) return
-    submittedRef.current = true
-    setPhase('submitting')
-    setSubmitReason(reason || null)
+  // ==========================================================================
+  // MANUAL SUBMIT (1 request dengan inline answers)
+  // ==========================================================================
+  const handleSubmitFinal = useCallback(
+    async (reason?: string) => {
+      if (submittedRef.current) return
+      submittedRef.current = true
+      setPhase('submitting')
+      setSubmitReason(reason || null)
 
-    try {
-      await Promise.all(
-        Object.entries(answers).map(([soalId, answer]) =>
-          fetch('/api/mahasiswa/ujian/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ ujianId: ujian.id, soalId, answer }),
-          }).catch(() => null)
-        )
-      )
-    } catch {}
+      // Final flush dirty answers dulu (best effort)
+      await flushAutoSave()
 
-    try {
-      await fetch('/api/mahasiswa/ujian/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ ujianId: ujian.id, reason }),
-      })
-      toast.success('Ujian berhasil di-submit')
-    } catch (e: any) {
-      toast.error(e.message || 'Gagal submit')
-    }
+      // Kumpulkan semua jawaban untuk inline submit
+      const allAnswers = Object.entries(answersRef.current).map(([soalId, answer]) => ({
+        soalId,
+        answer,
+      }))
 
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {})
-    }
+      try {
+        const res = await fetch('/api/mahasiswa/ujian/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            ujianId: ujian.id,
+            reason,
+            answers: allAnswers,
+          }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          toast.error(data.error || 'Gagal submit')
+        } else {
+          toast.success('Ujian berhasil di-submit')
+        }
+      } catch (e: any) {
+        toast.error(e.message || 'Gagal submit')
+      }
 
-    setTimeout(() => setPhase('submitted'), 1500)
-  }, [answers, ujian.id])
+      exitFullscreenCrossBrowser()
+      setTimeout(() => setPhase('submitted'), 1500)
+    },
+    [ujian.id, flushAutoSave],
+  )
 
-  // Timer
+  // ==========================================================================
+  // TIMER
+  // ==========================================================================
   useEffect(() => {
     if (phase !== 'running' || !session) return
     const updateTimer = () => {
@@ -198,34 +323,30 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
     return () => clearInterval(interval)
   }, [phase, session, handleSubmitFinal])
 
-  // Auto-save answer
+  // ==========================================================================
+  // SAVE ANSWER (local only — dirty flag, actual save via batch interval)
+  // ==========================================================================
   const saveAnswer = useCallback((soalId: string, answer: string) => {
-    setAnswers((prev) => ({ ...prev, [soalId]: answer }))
-    if (saveTimerRef.current[soalId]) {
-      clearTimeout(saveTimerRef.current[soalId])
-    }
-    saveTimerRef.current[soalId] = window.setTimeout(async () => {
-      try {
-        await fetch('/api/mahasiswa/ujian/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ ujianId: ujian.id, soalId, answer }),
-        })
-      } catch {}
-    }, 2000)
-  }, [ujian.id])
+    setAnswers((prev) => {
+      const next = { ...prev, [soalId]: answer }
+      answersRef.current = next
+      return next
+    })
+    dirtyAnswersRef.current.add(soalId)
+  }, [])
 
-  // Cleanup
+  // ==========================================================================
+  // CLEANUP
+  // ==========================================================================
   useEffect(() => {
     return () => {
-      if (document.fullscreenElement) {
-        document.exitFullscreen().catch(() => {})
-      }
+      exitFullscreenCrossBrowser()
     }
   }, [])
 
-  // ===== INTRO PHASE =====
+  // ==========================================================================
+  // INTRO PHASE
+  // ==========================================================================
   if (phase === 'intro') {
     return (
       <div className="max-w-3xl mx-auto space-y-6">
@@ -236,7 +357,8 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
           <CardHeader>
             <CardTitle className="text-xl">{ujian.title}</CardTitle>
             <div className="text-sm text-muted-foreground">
-              {ujian.dosenAjar?.mataKuliah?.name} • {ujian.dosenAjar?.kelas?.name} • {ujian.type} • {ujian.durationMin} menit
+              {ujian.dosenAjar?.mataKuliah?.name} • {ujian.dosenAjar?.kelas?.name} • {ujian.type} •{' '}
+              {ujian.durationMin} menit
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -249,7 +371,9 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
             {ujian.instruction && (
               <div className="p-3 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
                 <h4 className="font-semibold mb-1 text-amber-900 dark:text-amber-200">Instruksi</h4>
-                <p className="text-sm text-amber-800 dark:text-amber-300">{ujian.instruction}</p>
+                <p className="text-sm text-amber-800 dark:text-amber-300 whitespace-pre-line">
+                  {ujian.instruction}
+                </p>
               </div>
             )}
             <div className="p-4 rounded-md bg-destructive/10 border border-destructive/20">
@@ -258,17 +382,22 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
                 Aturan Ujian
               </h4>
               <ul className="text-sm space-y-1 text-destructive/90 list-disc list-inside">
-                <li>Dilarang <strong>buka tab baru</strong> — jawaban otomatis ter-submit</li>
-                <li>Dilarang <strong>keluar browser</strong> — jawaban otomatis ter-submit</li>
-                <li>Dilarang <strong>mengecilkan/split layar</strong> — jawaban otomatis ter-submit</li>
+                <li>Dilarang <strong>buka tab baru</strong> — auto-submit langsung</li>
+                <li>Dilarang <strong>keluar browser</strong> — auto-submit langsung</li>
+                <li>Dilarang <strong>split screen</strong> — auto-submit langsung</li>
+                <li>Dilarang <strong>rotate ke landscape</strong> (HP) — auto-submit</li>
+                <li>Dilarang <strong>keluar fullscreen</strong> — auto-submit</li>
+                <li>Dilarang <strong>overlay app lain</strong> — auto-submit</li>
                 <li>Soal <strong>diacak</strong> — setiap mahasiswa dapat urutan berbeda</li>
-                <li>Jawaban <strong>tersimpan otomatis</strong> saat mengetik</li>
+                <li>Jawaban <strong>tersimpan otomatis</strong> setiap 5 detik</li>
                 <li>Mode <strong>fullscreen</strong> akan diaktifkan</li>
-                <li>Klik kanan dan shortcut (Ctrl+T/N/W, F5) diblokir</li>
+                <li>Klik kanan, copy-paste, dan shortcut diblokir</li>
               </ul>
             </div>
             <div className="flex justify-end gap-3">
-              <Button variant="outline" onClick={onExit}>Batal</Button>
+              <Button variant="outline" onClick={onExit}>
+                Batal
+              </Button>
               <Button onClick={handleStart} size="lg">
                 <Shield className="w-4 h-4 mr-2" />
                 Mulai Ujian
@@ -280,7 +409,9 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
     )
   }
 
-  // ===== SUBMITTING PHASE =====
+  // ==========================================================================
+  // SUBMITTING PHASE
+  // ==========================================================================
   if (phase === 'submitting') {
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center gap-4">
@@ -293,7 +424,9 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
     )
   }
 
-  // ===== SUBMITTED PHASE =====
+  // ==========================================================================
+  // SUBMITTED PHASE
+  // ==========================================================================
   if (phase === 'submitted') {
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center gap-4 text-center">
@@ -312,13 +445,17 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
     )
   }
 
-  // ===== RUNNING PHASE =====
+  // ==========================================================================
+  // RUNNING PHASE
+  // ==========================================================================
   const totalSeconds = ujian.durationMin * 60
   const progressPercent = ((totalSeconds - timeLeft) / totalSeconds) * 100
   const hours = Math.floor(timeLeft / 3600)
   const minutes = Math.floor((timeLeft % 3600) / 60)
   const seconds = timeLeft % 60
-  const timeStr = `${hours > 0 ? `${hours}:` : ''}${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+  const timeStr = `${hours > 0 ? `${hours}:` : ''}${minutes.toString().padStart(2, '0')}:${seconds
+    .toString()
+    .padStart(2, '0')}`
   const isLowTime = timeLeft < 300
 
   const currentSoal = soal[currentSoalIdx]
@@ -333,12 +470,16 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
             <Shield className="w-5 h-5 text-primary flex-shrink-0" />
             <div className="min-w-0">
               <div className="font-semibold text-sm truncate">{ujian.title}</div>
-              <div className="text-xs text-muted-foreground truncate">{ujian.dosenAjar?.mataKuliah?.name}</div>
+              <div className="text-xs text-muted-foreground truncate">
+                {ujian.dosenAjar?.mataKuliah?.name}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
             <Badge variant="outline">{ujian.type}</Badge>
-            <div className={`flex items-center gap-1.5 font-mono font-bold ${isLowTime ? 'text-destructive' : ''}`}>
+            <div
+              className={`flex items-center gap-1.5 font-mono font-bold ${isLowTime ? 'text-destructive' : ''}`}
+            >
               <Clock className="w-4 h-4" />
               <span className="text-lg">{timeStr}</span>
             </div>
@@ -374,7 +515,9 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-start gap-2">
-                <Badge variant="secondary" className="mt-0.5">#{currentSoal.order}</Badge>
+                <Badge variant="secondary" className="mt-0.5">
+                  #{currentSoal.order}
+                </Badge>
                 <span>{currentSoal.pertanyaan}</span>
               </CardTitle>
             </CardHeader>
@@ -387,9 +530,19 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
                   {currentSoal.options.map((opt, idx) => {
                     const letter = String.fromCharCode(65 + idx)
                     return (
-                      <div key={idx} className="flex items-start gap-3 p-3 rounded-md border hover:bg-accent transition-colors cursor-pointer">
-                        <RadioGroupItem value={letter} id={`${currentSoal.id}-${idx}`} className="mt-0.5" />
-                        <Label htmlFor={`${currentSoal.id}-${idx}`} className="cursor-pointer flex-1 text-sm">
+                      <div
+                        key={idx}
+                        className="flex items-start gap-3 p-3 rounded-md border hover:bg-accent transition-colors cursor-pointer"
+                      >
+                        <RadioGroupItem
+                          value={letter}
+                          id={`${currentSoal.id}-${idx}`}
+                          className="mt-0.5"
+                        />
+                        <Label
+                          htmlFor={`${currentSoal.id}-${idx}`}
+                          className="cursor-pointer flex-1 text-sm"
+                        >
                           <span className="font-medium mr-2">{letter}.</span>
                           {opt}
                         </Label>
@@ -408,7 +561,7 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
                   />
                   <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
                     <CheckCircle className="w-3 h-3 text-emerald-600" />
-                    Jawaban tersimpan otomatis saat mengetik
+                    Jawaban tersimpan otomatis setiap 5 detik
                   </div>
                 </div>
               )}
@@ -418,7 +571,11 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
 
         {/* Navigation */}
         <div className="flex items-center justify-between mt-6 gap-2">
-          <Button variant="outline" onClick={() => setCurrentSoalIdx(Math.max(0, currentSoalIdx - 1))} disabled={currentSoalIdx === 0}>
+          <Button
+            variant="outline"
+            onClick={() => setCurrentSoalIdx(Math.max(0, currentSoalIdx - 1))}
+            disabled={currentSoalIdx === 0}
+          >
             ← Sebelumnya
           </Button>
           <div className="flex flex-wrap gap-1 max-w-md">
@@ -457,7 +614,8 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
           <div className="flex items-start gap-2 text-amber-800 dark:text-amber-300">
             <Eye className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <div>
-              <strong>Anti-Cheating Aktif:</strong> Jangan pindah tab, keluar browser, atau mengecilkan layar. Pelanggaran akan menyebabkan auto-submit otomatis.
+              <strong>Anti-Cheating Aktif:</strong> Jangan pindah tab, keluar browser, split screen,
+              rotate landscape, atau buka app lain. Pelanggaran akan menyebabkan auto-submit otomatis.
             </div>
           </div>
         </div>
@@ -493,4 +651,4 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
       </AlertDialog>
     </div>
   )
-}
+} 
