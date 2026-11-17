@@ -259,6 +259,13 @@ export function useAntiCheat({
         }
       }
     }
+    // --- 8. Pointer leave viewport — DISABLED ---
+    // Catatan: pointerleave di document terlalu false positive di mobile:
+    //   - Long press untuk copy → context menu native muncul sebentar → pointerleave fire
+    //   - Tap yang lambat → pointerleave fire
+    //   - Scroll inertia di iOS Safari → pointerleave fire
+    //   - Keyboard mobile muncul → viewport shift → pointerleave fire
+    // Deteksi overlay system lebih reliable via periodic document.hasFocus() saja.
 
     // Daftar semua listener
     document.addEventListener('visibilitychange', handleVisibility)
@@ -267,7 +274,7 @@ export function useAntiCheat({
     window.addEventListener('beforeunload', handleBeforeUnload)
     window.addEventListener('resize', handleResize)
     window.addEventListener('orientationchange', handleOrientationChange)
-    document.addEventListener('pointerleave', handlePointerLeave)
+    // pointerleave DISABLED — terlalu false positive di mobile (long press, scroll inertia, keyboard)
     document.addEventListener('keydown', handleKeyDown)
     document.addEventListener('contextmenu', handleContextMenu)
     document.addEventListener('copy', handleCopy)
@@ -335,7 +342,6 @@ export function useAntiCheat({
       window.removeEventListener('beforeunload', handleBeforeUnload)
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('orientationchange', handleOrientationChange)
-      document.removeEventListener('pointerleave', handlePointerLeave)
       document.removeEventListener('keydown', handleKeyDown)
       document.removeEventListener('contextmenu', handleContextMenu)
       document.removeEventListener('copy', handleCopy)
@@ -371,4 +377,4 @@ export function useAntiCheat({
 }
 
 // Export helpers supaya exam-runner bisa pakai tanpa import tambahan
-export { requestFullscreenCrossBrowser, exitFullscreenCrossBrowser } 
+export { requestFullscreenCrossBrowser, exitFullscreenCrossBrowser }

@@ -9,6 +9,7 @@ import { formatDateTime, timeUntil, statusBadge } from '@/components/lms/shared/
 import { FileCheck, AlertCircle, Clock, Play, History } from 'lucide-react'
 import { ExamRunner } from './exam-runner'
 import { toast } from 'sonner'
+import { fetchWithCache, clearCached } from '@/lib/client-cache'
 
 interface Ujian {
   id: string
@@ -33,7 +34,6 @@ export function MahasiswaUjian() {
   const [showHistory, setShowHistory] = useState(false)
 
   async function fetchData() {
-    setLoading(true)
     try {
       const [uRes, sRes] = await Promise.all([
         fetch('/api/mahasiswa/ujian', { credentials: 'include' }),
@@ -52,8 +52,44 @@ export function MahasiswaUjian() {
   }
 
   useEffect(() => {
-    fetchData()
+    let cancelled = false
+    async function load() {
+      try {
+        // Pakai cache untuk instant render kalau sudah pernah load
+        const { data: cached, fresh } = await fetchWithCache<{ ujian: Ujian[] }>(
+          'mhs-ujian',
+          '/api/mahasiswa/ujian',
+        )
+        if (cancelled) return
+        if (cached) {
+          setUjian(cached.ujian)
+          setLoading(false)
+        }
+        if (fresh) {
+          setUjian(fresh.ujian)
+        }
+        // Fetch sessions terpisah (tidak di-cache karena bisa berubah saat submit)
+        const sRes = await fetch('/api/mahasiswa/ujian/sessions', { credentials: 'include' })
+        const sd = await sRes.json()
+        if (!cancelled) setSessions(sd.sessions || [])
+      } catch (e: any) {
+        if (!cancelled) setError(e.message)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
   }, [])
+
+  // Refresh cache saat exit dari exam runner (data ujian mungkin berubah)
+  function exitExamRunner() {
+    clearCached('mhs-ujian')
+    setActiveExam(null)
+    fetchData()
+  }
 
   if (loading) {
     return (
@@ -74,7 +110,7 @@ export function MahasiswaUjian() {
 
   // If exam is active, render the runner
   if (activeExam) {
-    return <ExamRunner ujian={activeExam} onExit={() => { setActiveExam(null); fetchData() }} />
+    return <ExamRunner ujian={activeExam} onExit={exitExamRunner} />
   }
 
   return (

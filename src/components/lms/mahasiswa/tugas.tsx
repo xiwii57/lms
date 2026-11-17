@@ -12,6 +12,7 @@ import { PageHeader, EmptyState } from '@/components/lms/shared/ui'
 import { formatDate, formatDateTime, timeUntil, bytesToSize } from '@/components/lms/shared/format'
 import { FileText, Upload, AlertCircle, CheckCircle, Clock, FileUp, Download } from 'lucide-react'
 import { toast } from 'sonner'
+import { fetchWithCache, clearCached } from '@/lib/client-cache'
 
 interface Tugas {
   id: string
@@ -35,22 +36,34 @@ export function MahasiswaTugas() {
   const [note, setNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  async function fetchTugas() {
-    setLoading(true)
-    try {
-      const res = await fetch('/api/mahasiswa/tugas', { credentials: 'include' })
-      const d = await res.json()
-      if (d.error) throw new Error(d.error)
-      setTugas(d.tugas)
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   useEffect(() => {
-    fetchTugas()
+    let cancelled = false
+    async function load() {
+      try {
+        const { data: cached, fresh } = await fetchWithCache<{ tugas: Tugas[] }>(
+          'mhs-tugas',
+          '/api/mahasiswa/tugas',
+        )
+        if (cancelled) return
+        if (cached) {
+          setTugas(cached.tugas)
+          setLoading(false)
+        }
+        if (fresh) {
+          setTugas(fresh.tugas)
+          setLoading(false)
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setError(e.message)
+          setLoading(false)
+        }
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   async function handleSubmit() {
@@ -75,7 +88,13 @@ export function MahasiswaTugas() {
       setSelected(null)
       setFile(null)
       setNote('')
-      fetchTugas()
+      // Clear cache + refetch untuk update tampilan
+      clearCached('mhs-tugas')
+      try {
+        const fresh = await fetch('/api/mahasiswa/tugas', { credentials: 'include' })
+        const fd = await fresh.json()
+        if (fd.tugas) setTugas(fd.tugas)
+      } catch {}
     } catch (e: any) {
       toast.error(e.message)
     } finally {
@@ -280,4 +299,4 @@ export function MahasiswaTugas() {
       </Dialog>
     </div>
   )
-} 
+}

@@ -17,7 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Shield, Clock, Send, CheckCircle, AlertTriangle, Eye, ChevronLeft } from 'lucide-react'
+import { Shield, Clock, Send, CheckCircle, AlertTriangle, Eye, ChevronLeft, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAntiCheat } from './use-anti-cheat'
 
@@ -91,6 +91,7 @@ function exitFullscreenCrossBrowser(): void {
 
 export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
   const [phase, setPhase] = useState<Phase>('intro')
+  const [starting, setStarting] = useState(false)
   const [soal, setSoal] = useState<Soal[]>([])
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [session, setSession] = useState<any>(null)
@@ -228,6 +229,8 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
   // START EXAM
   // ==========================================================================
   async function handleStart() {
+    if (starting) return // cegah double-click
+    setStarting(true)
     try {
       const res = await fetch('/api/mahasiswa/ujian/start', {
         method: 'POST',
@@ -238,6 +241,7 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
       const data = await res.json()
       if (!res.ok) {
         toast.error(data.error || 'Gagal memulai ujian')
+        setStarting(false)
         return
       }
       setSession(data.session)
@@ -256,6 +260,8 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
       await requestFullscreenCrossBrowser()
     } catch (e: any) {
       toast.error(e.message || 'Gagal memulai ujian')
+    } finally {
+      setStarting(false)
     }
   }
 
@@ -395,12 +401,21 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
               </ul>
             </div>
             <div className="flex justify-end gap-3">
-              <Button variant="outline" onClick={onExit}>
+              <Button variant="outline" onClick={onExit} disabled={starting}>
                 Batal
               </Button>
-              <Button onClick={handleStart} size="lg">
-                <Shield className="w-4 h-4 mr-2" />
-                Mulai Ujian
+              <Button onClick={handleStart} size="lg" disabled={starting}>
+                {starting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Menyiapkan Ujian...
+                  </>
+                ) : (
+                  <>
+                    <Shield className="w-4 h-4 mr-2" />
+                    Mulai Ujian
+                  </>
+                )}
               </Button>
             </div>
           </CardContent>
@@ -502,37 +517,53 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
       )}
 
       <div className="max-w-4xl mx-auto p-4 sm:p-6 lg:p-8 pb-32">
-        {/* Progress */}
-        <div className="mb-4 flex items-center justify-between text-sm">
-          <div className="text-muted-foreground">
-            Soal {currentSoalIdx + 1} dari {soal.length} • Terjawab: {answeredCount}/{soal.length}
+        {/* Progress — lebih friendly mobile */}
+        <div className="mb-4 p-3 rounded-lg bg-muted/30 border">
+          <div className="flex items-center justify-between text-sm mb-2">
+            <div className="font-medium">
+              Soal <span className="text-primary">{currentSoalIdx + 1}</span>
+              <span className="text-muted-foreground"> dari {soal.length}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="text-xs">
+                Terjawab: <span className="ml-1 font-bold text-emerald-600">{answeredCount}</span>
+                <span className="text-muted-foreground">/{soal.length}</span>
+              </Badge>
+              <Badge variant="secondary" className="text-xs">{currentSoal?.points || 0} poin</Badge>
+            </div>
           </div>
-          <Badge variant="outline">{currentSoal?.points || 0} poin</Badge>
+          <Progress value={(answeredCount / soal.length) * 100} className="h-2" />
         </div>
 
         {/* Question */}
         {currentSoal && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-start gap-2">
-                <Badge variant="secondary" className="mt-0.5">
+          <Card className="border-2">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base sm:text-lg flex items-start gap-2 leading-relaxed">
+                <Badge variant="secondary" className="mt-1 flex-shrink-0">
                   #{currentSoal.order}
                 </Badge>
                 <span>{currentSoal.pertanyaan}</span>
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-3">
               {currentSoal.type === 'MULTIPLE_CHOICE' && currentSoal.options ? (
                 <RadioGroup
                   value={answers[currentSoal.id] || ''}
                   onValueChange={(v) => saveAnswer(currentSoal.id, v)}
+                  className="space-y-2"
                 >
                   {currentSoal.options.map((opt, idx) => {
                     const letter = String.fromCharCode(65 + idx)
+                    const isSelected = answers[currentSoal.id] === letter
                     return (
                       <div
                         key={idx}
-                        className="flex items-start gap-3 p-3 rounded-md border hover:bg-accent transition-colors cursor-pointer"
+                        className={`flex items-start gap-3 p-3 sm:p-4 rounded-lg border-2 transition-all cursor-pointer ${
+                          isSelected
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-primary/50 hover:bg-accent/50'
+                        }`}
                       >
                         <RadioGroupItem
                           value={letter}
@@ -541,9 +572,9 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
                         />
                         <Label
                           htmlFor={`${currentSoal.id}-${idx}`}
-                          className="cursor-pointer flex-1 text-sm"
+                          className="cursor-pointer flex-1 text-sm sm:text-base leading-relaxed"
                         >
-                          <span className="font-medium mr-2">{letter}.</span>
+                          <span className="font-bold mr-2 text-primary">{letter}.</span>
                           {opt}
                         </Label>
                       </div>
@@ -555,12 +586,12 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
                   <Textarea
                     value={answers[currentSoal.id] || ''}
                     onChange={(e) => saveAnswer(currentSoal.id, e.target.value)}
-                    placeholder="Tulis jawaban Anda di sini... (jawaban tersimpan otomatis)"
-                    rows={10}
-                    className="resize-y"
+                    placeholder="Tulis jawaban Anda di sini..."
+                    rows={8}
+                    className="resize-y text-sm sm:text-base"
                   />
-                  <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3 text-emerald-600" />
+                  <div className="text-xs text-muted-foreground mt-2 flex items-center gap-1.5">
+                    <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
                     Jawaban tersimpan otomatis setiap 5 detik
                   </div>
                 </div>
@@ -569,27 +600,35 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
           </Card>
         )}
 
-        {/* Navigation */}
-        <div className="flex items-center justify-between mt-6 gap-2">
+        {/* Navigation — tombol besar friendly mobile */}
+        <div className="grid grid-cols-2 gap-3 mt-6">
           <Button
             variant="outline"
+            size="lg"
             onClick={() => setCurrentSoalIdx(Math.max(0, currentSoalIdx - 1))}
             disabled={currentSoalIdx === 0}
+            className="h-12 text-base"
           >
-            ← Sebelumnya
+            <ChevronLeft className="w-5 h-5" />
+            Sebelumnya
           </Button>
-          <div className="flex flex-wrap gap-1 max-w-md">
+        </div>
+
+        {/* Nomor soal — scrollable horizontal di mobile */}
+        <div className="mt-4">
+          <div className="text-xs text-muted-foreground mb-2">Loncat ke soal:</div>
+          <div className="flex gap-1.5 overflow-x-auto pb-2 -mx-1 px-1">
             {soal.map((s, i) => {
               const answered = answers[s.id] && answers[s.id].trim()
               return (
                 <button
                   key={s.id}
                   onClick={() => setCurrentSoalIdx(i)}
-                  className={`w-8 h-8 rounded text-xs font-medium transition-colors ${
+                  className={`flex-shrink-0 w-9 h-9 rounded-lg text-sm font-medium transition-all ${
                     i === currentSoalIdx
-                      ? 'bg-primary text-primary-foreground'
+                      ? 'bg-primary text-primary-foreground ring-2 ring-primary ring-offset-2'
                       : answered
-                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300'
+                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300 hover:bg-emerald-200'
                       : 'bg-muted text-muted-foreground hover:bg-accent'
                   }`}
                 >
@@ -651,4 +690,4 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
       </AlertDialog>
     </div>
   )
-} 
+}
