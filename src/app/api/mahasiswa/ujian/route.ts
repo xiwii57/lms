@@ -2,36 +2,59 @@ import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { db } from '@/lib/db'
 
-// List ujian available to mahasiswa
+// ============================================================================
+// List ujian available to mahasiswa — OPTIMIZED
+// ----------------------------------------------------------------------------
+// Before: 3 sequential queries (mhsKelas → dosenAjar → ujian)
+// After:  1 query dengan nested filter `some` + select field yang dipakai
+// ============================================================================
 export async function GET() {
   const session = await getSession()
   if (!session || session.role !== 'MAHASISWA') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
-  const mhsKelas = await db.mahasiswaKelas.findMany({
-    where: { mahasiswaId: session.id },
-    select: { kelasId: true },
-  })
-  const kelasIds = mhsKelas.map((mk) => mk.kelasId)
-  const dosenAjar = await db.dosenAjar.findMany({
-    where: { kelasId: { in: kelasIds } },
-    select: { id: true },
-  })
-  const dosenAjarIds = dosenAjar.map((da) => da.id)
 
+  // 1 query: ambil ujian yang dosenAjar-nya mengajar di kelas mahasiswa
   const ujian = await db.ujian.findMany({
-    where: { dosenAjarId: { in: dosenAjarIds }, status: { in: ['PUBLISHED', 'ONGOING'] } },
-    include: {
-      dosenAjar: { include: { mataKuliah: true, kelas: true } },
-      sessions: { where: { mahasiswaId: session.id } },
+    where: {
+      dosenAjar: {
+        kelas: {
+          mahasiswaKelas: { some: { mahasiswaId: session.id } },
+        },
+      },
+      status: { in: ['PUBLISHED', 'ONGOING'] },
+      endTime: { gte: new Date() },
+    },
+    select: {
+      id: true,
+      title: true,
+      type: true,
+      description: true,
+      instruction: true,
+      durationMin: true,
+      startTime: true,
+      endTime: true,
+      shuffleSoal: true,
+      dosenAjar: {
+        select: {
+          mataKuliah: { select: { name: true, code: true } },
+          kelas: { select: { name: true } },
+        },
+      },
+      sessions: {
+        where: { mahasiswaId: session.id },
+        select: {
+          id: true,
+          status: true,
+          startTime: true,
+          endTime: true,
+          autoSubmitted: true,
+        },
+      },
       _count: { select: { soal: true } },
     },
     orderBy: { startTime: 'asc' },
   })
 
-  // Filter out expired ones (endTime passed)
-  const now = new Date()
-  const activeUjian = ujian.filter((u) => new Date(u.endTime) > now)
-
-  return NextResponse.json({ ujian: activeUjian })
-}
+  return NextResponse.json({ ujian })
+} 

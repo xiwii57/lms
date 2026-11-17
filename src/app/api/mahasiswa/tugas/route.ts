@@ -2,46 +2,63 @@ import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
 import { db } from '@/lib/db'
 
+// ============================================================================
+// List tugas available to mahasiswa — OPTIMIZED
+// ----------------------------------------------------------------------------
+// Before: 3 sequential queries (mhsKelas → dosenAjar → tugas)
+// After:  1 query dengan nested filter `some` + select hanya field yang dipakai
+// ============================================================================
 export async function GET() {
   try {
     const session = await getSession()
     if (!session || session.role !== 'MAHASISWA') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
-    const mhsKelas = await db.mahasiswaKelas.findMany({
-      where: { mahasiswaId: session.id },
-      select: { kelasId: true },
-    })
-    const kelasIds = mhsKelas.map((mk) => mk.kelasId)
 
-    if (kelasIds.length === 0) {
-      return NextResponse.json({ tugas: [] })
-    }
-
-    const dosenAjar = await db.dosenAjar.findMany({
-      where: { kelasId: { in: kelasIds } },
-      select: { id: true },
-    })
-    const dosenAjarIds = dosenAjar.map((da) => da.id)
-
-    if (dosenAjarIds.length === 0) {
-      return NextResponse.json({ tugas: [] })
-    }
-
+    // 1 query: ambil tugas yang dosenAjar-nya mengajar di kelas mahasiswa
     const tugas = await db.tugas.findMany({
-      where: { dosenAjarId: { in: dosenAjarIds } },
-      include: {
+      where: {
         dosenAjar: {
-          include: { mataKuliah: true, kelas: true, dosen: { select: { name: true } } },
+          kelas: {
+            mahasiswaKelas: { some: { mahasiswaId: session.id } },
+          },
         },
-        submissions: { where: { mahasiswaId: session.id } },
+      },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        deadline: true,
+        fileName: true,
+        filePath: true,
+        fileSize: true,
+        fileType: true,
+        createdAt: true,
+        dosenAjar: {
+          select: {
+            mataKuliah: { select: { name: true, code: true } },
+            kelas: { select: { name: true } },
+            dosen: { select: { name: true } },
+          },
+        },
+        submissions: {
+          where: { mahasiswaId: session.id },
+          select: {
+            id: true,
+            fileName: true,
+            filePath: true,
+            fileSize: true,
+            submittedAt: true,
+            nilai: true,
+            feedback: true,
+          },
+        },
       },
       orderBy: { deadline: 'asc' },
     })
 
     return NextResponse.json({ tugas })
   } catch (e: any) {
-    console.error('Tugas API error:', e)
     return NextResponse.json({ error: e.message || 'Gagal memuat tugas' }, { status: 500 })
   }
-}
+} 

@@ -141,13 +141,13 @@ export function MahasiswaJadwal() {
                         className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-md bg-accent/40 border border-border/50 gap-2"
                       >
                         <div className="min-w-0 flex-1">
-                          <div className="font-medium text-sm">{da?.mataKuliah?.name || '-'}</div>
-                            <div className="text-xs text-muted-foreground mt-0.5">
-                              {da?.mataKuliah?.code || '-'} • {da?.mataKuliah?.sks || 0} SKS • {da?.kelas?.name || '-'}
-                            </div>
-                            <div className="text-xs text-muted-foreground mt-0.5">
-                              Dosen: {da?.dosen?.name || '-'}
-                            </div>
+                          <div className="font-medium text-sm">{da?.mataKuliah?.name}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {da?.mataKuliah?.code} • {da?.mataKuliah?.sks} SKS • {da?.kelas?.name}
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            Dosen: {da?.dosen?.name}
+                          </div>
                         </div>
                         <div className="flex flex-col sm:items-end gap-1">
                           <Badge variant="outline">{da.scheduleTime}</Badge>
@@ -168,4 +168,4 @@ export function MahasiswaJadwal() {
       )}
     </div>
   )
-}
+} 

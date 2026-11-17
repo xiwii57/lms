@@ -147,8 +147,8 @@ export function MahasiswaTugas() {
                       </div>
                       <p className="text-sm text-muted-foreground line-clamp-2 mb-2">{t.description}</p>
                       <div className="text-xs text-muted-foreground space-y-0.5">
-                        <div>{t?.dosenAjar?.mataKuliah?.name || '-'} • {t?.dosenAjar?.kelas?.name || '-'}</div>
-                        <div>Dosen: {t?.dosenAjar?.dosen?.name || '-'}</div>
+                        <div>{t.dosenAjar?.mataKuliah?.name} • {t.dosenAjar?.kelas?.name}</div>
+                        <div>Dosen: {t.dosenAjar?.dosen?.name}</div>
                         <div>Deadline: {formatDateTime(t.deadline)}</div>
                       </div>
                       {isLate && (
@@ -190,10 +190,10 @@ export function MahasiswaTugas() {
                         setFile(null)
                         setNote(submission?.note || '')
                       }}
-                        variant={isSubmitted ? 'outline' : 'default'}
-                        className="flex-shrink-0"
-                        disabled={isLate}
-                      >
+                      variant={isSubmitted ? 'outline' : 'default'}
+                      className="flex-shrink-0"
+                      disabled={isLate}
+                    >
                       <Upload className="w-4 h-4" />
                       {isLate ? 'Berakhir' : isSubmitted ? 'Update Submission' : 'Submit Tugas'}
                     </Button>
@@ -280,4 +280,4 @@ export function MahasiswaTugas() {
       </Dialog>
     </div>
   )
-}
+} 

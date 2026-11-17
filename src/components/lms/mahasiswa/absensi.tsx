@@ -73,6 +73,12 @@ export function MahasiswaAbsensi() {
   const [file, setFile] = useState<File | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
+  // Ref ke absensiList terbaru (untuk akses di polling interval tanpa re-create)
+  const absensiListRef = useRef<Absensi[]>([])
+  useEffect(() => {
+    absensiListRef.current = absensiList
+  }, [absensiList])
+
   // QR Scanner state
   const [qrAbsensi, setQrAbsensi] = useState<Absensi | null>(null)
   const [scanStatus, setScanStatus] = useState<ScanStatus>('idle')
@@ -106,7 +112,14 @@ export function MahasiswaAbsensi() {
 
   useEffect(() => {
     fetchData()
-    const interval = setInterval(fetchData, 30000)
+    // Polling lebih lama (60s) — hanya refresh kalau ada sesi OPEN aktif
+    // supaya tidak bebankan server saat semua sesi sudah selesai
+    const interval = setInterval(() => {
+      const hasOpen = absensiListRef.current.some(
+        (a) => a.records.length === 0 && ((a as any).effectiveStatus || a.status) === 'OPEN',
+      )
+      if (hasOpen) fetchData()
+    }, 60000)
     return () => clearInterval(interval)
   }, [])
 
@@ -444,14 +457,16 @@ export function MahasiswaAbsensi() {
   }
 
   const now = new Date()
-  const openSessions = absensiList.filter((a) => {
-    if (a.records.length > 0) return false
-    if (a.status === 'OPEN' && a.expiresAt && new Date(a.expiresAt) < now) return false
-    return a.status === 'OPEN'
-  })
+  // Pakai effectiveStatus (computed di server: kalau OPEN tapi expired → EXPIRED)
+  const effStatus = (a: Absensi) => (a as any).effectiveStatus || a.status
+  const openSessions = absensiList.filter(
+    (a) => a.records.length === 0 && effStatus(a) === 'OPEN',
+  )
   const alreadyAbsen = absensiList.filter((a) => a.records.length > 0)
-  const expiredNoRecord = absensiList.filter((a) =>
-    a.records.length === 0 && (a.status === 'EXPIRED' || a.status === 'CLOSED' || (a.expiresAt && new Date(a.expiresAt) < now))
+  const expiredNoRecord = absensiList.filter(
+    (a) =>
+      a.records.length === 0 &&
+      ['EXPIRED', 'CLOSED'].includes(effStatus(a)),
   )
 
   return (
@@ -975,4 +990,4 @@ export function MahasiswaAbsensi() {
       </Dialog>
     </div>
   )
-}
+} 
