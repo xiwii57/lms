@@ -17,7 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Shield, Clock, Send, CheckCircle, AlertTriangle, Eye, ChevronLeft, Loader2 } from 'lucide-react'
+import { Shield, Clock, Send, CheckCircle, AlertTriangle, ChevronLeft, Loader2, FileCheck, FileText } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAntiCheat } from './use-anti-cheat'
 
@@ -232,6 +232,11 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
     if (starting) return // cegah double-click
     setStarting(true)
     try {
+      // Request fullscreen SEBELUM fetch & setPhase('running') — supaya
+      // browser sempat masuk fullscreen sebelum anti-cheat aktif.
+      // User gesture (klik tombol Mulai Ujian) masih fresh → browser izinkan.
+      await requestFullscreenCrossBrowser()
+
       const res = await fetch('/api/mahasiswa/ujian/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -256,12 +261,33 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
       setPhase('running')
       toast.success('Ujian dimulai - jangan tinggalkan halaman ini!')
 
-      // Request fullscreen (cross-browser)
-      await requestFullscreenCrossBrowser()
+      // Cek apakah fullscreen berhasil masuk — kalau tidak, tampilkan tombol manual
+      setTimeout(() => {
+        if (!document.fullscreenElement) {
+          toast.warning(
+            'Klik di mana saja untuk mengaktifkan mode fullscreen. Ujian butuh fullscreen untuk anti-cheat.',
+            { duration: 8000 },
+          )
+        }
+      }, 500)
     } catch (e: any) {
       toast.error(e.message || 'Gagal memulai ujian')
     } finally {
       setStarting(false)
+    }
+  }
+
+  // Tombol manual untuk aktifkan fullscreen kalau auto-request ditolak browser
+  async function handleManualFullscreen() {
+   try {
+      await requestFullscreenCrossBrowser()
+      if (document.fullscreenElement) {
+        toast.success('Fullscreen aktif')
+      } else {
+        toast.error('Browser menolak fullscreen. Lanjutkan ujian dengan resiko sendiri.')
+      }
+    } catch {
+      toast.error('Gagal aktifkan fullscreen')
     }
   }
 
@@ -351,75 +377,129 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
   }, [])
 
   // ==========================================================================
-  // INTRO PHASE
+  // INTRO PHASE — clean & friendly
   // ==========================================================================
   if (phase === 'intro') {
     return (
-      <div className="max-w-3xl mx-auto space-y-6">
-        <Button variant="ghost" size="sm" onClick={onExit} className="mb-2 -ml-2">
-          <ChevronLeft className="w-4 h-4 mr-1" /> Kembali ke Daftar Ujian
+      <div className="max-w-2xl mx-auto px-4 py-6 sm:py-10">
+        {/* Back button — minimalis */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onExit}
+          className="mb-4 -ml-2 text-muted-foreground"
+        >
+          <ChevronLeft className="w-4 h-4 mr-1" /> Kembali
         </Button>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-xl">{ujian.title}</CardTitle>
-            <div className="text-sm text-muted-foreground">
-              {ujian.dosenAjar?.mataKuliah?.name} • {ujian.dosenAjar?.kelas?.name} • {ujian.type} •{' '}
-              {ujian.durationMin} menit
+
+        {/* Hero — judul + info singkat */}
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium mb-3">
+            <FileCheck className="w-3.5 h-3.5" />
+            {ujian.type}
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight mb-2">{ujian.title}</h1>
+          <div className="text-sm text-muted-foreground">
+            {ujian.dosenAjar?.mataKuliah?.name} · {ujian.dosenAjar?.kelas?.name}
+          </div>
+        </div>
+
+        {/* Info cards — grid 3 kolom di desktop */}
+        <div className="grid grid-cols-3 gap-2 mb-6">
+          <div className="rounded-lg border bg-card p-3 text-center">
+            <Clock className="w-5 h-5 mx-auto text-muted-foreground mb-1" />
+            <div className="text-xs text-muted-foreground">Durasi</div>
+            <div className="text-sm font-semibold">{ujian.durationMin} mnt</div>
+          </div>
+          <div className="rounded-lg border bg-card p-3 text-center">
+            <FileText className="w-5 h-5 mx-auto text-muted-foreground mb-1" />
+            <div className="text-xs text-muted-foreground">Tipe</div>
+            <div className="text-sm font-semibold">{ujian.type}</div>
+          </div>
+          <div className="rounded-lg border bg-card p-3 text-center">
+            <Shield className="w-5 h-5 mx-auto text-muted-foreground mb-1" />
+            <div className="text-xs text-muted-foreground">Anti-Cheat</div>
+            <div className="text-sm font-semibold text-emerald-600">Aktif</div>
+          </div>
+        </div>
+
+        {/* Deskripsi singkat */}
+        {ujian.description && (
+          <div className="mb-4 p-3 rounded-lg bg-muted/30 text-sm text-muted-foreground">
+            {ujian.description}
+          </div>
+        )}
+
+        {/* Instruksi — collapsible */}
+        {ujian.instruction && (
+          <details className="mb-4 rounded-lg border bg-amber-50/50 dark:bg-amber-950/20">
+            <summary className="cursor-pointer p-3 text-sm font-medium text-amber-900 dark:text-amber-200 select-none">
+              📋 Petunjuk pengerjaan (klik untuk lihat)
+            </summary>
+            <div className="px-3 pb-3 text-sm text-amber-800 dark:text-amber-300 whitespace-pre-line">
+              {ujian.instruction}
             </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {ujian.description && (
-              <div>
-                <h4 className="font-semibold mb-1">Deskripsi</h4>
-                <p className="text-sm text-muted-foreground">{ujian.description}</p>
-              </div>
+          </details>
+        )}
+
+        {/* Aturan — compact, gunakan icons */}
+        <div className="mb-6 p-4 rounded-lg border-2 border-destructive/20 bg-destructive/5">
+          <div className="flex items-center gap-2 mb-3">
+            <Shield className="w-4 h-4 text-destructive" />
+            <h3 className="font-semibold text-sm text-destructive">Aturan Anti-Cheat</h3>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-destructive/80">
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
+              Buka tab baru → auto-submit
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
+              Split screen → auto-submit
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
+              Keluar browser → auto-submit
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
+              Keluar fullscreen → auto-submit
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
+              Rotate landscape → auto-submit
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
+              Copy-paste diblokir
+            </div>
+          </div>
+        </div>
+
+        {/* CTA — tombol besar di tengah */}
+        <div className="flex flex-col gap-2">
+          <Button
+            onClick={handleStart}
+            size="lg"
+            disabled={starting}
+            className="w-full h-14 text-base font-semibold"
+          >
+            {starting ? (
+              <>
+                <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                Menyiapkan Ujian...
+              </>
+            ) : (
+              <>
+                <Shield className="w-5 h-5 mr-2" />
+                Mulai Ujian Sekarang
+              </>
             )}
-            {ujian.instruction && (
-              <div className="p-3 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
-                <h4 className="font-semibold mb-1 text-amber-900 dark:text-amber-200">Instruksi</h4>
-                <p className="text-sm text-amber-800 dark:text-amber-300 whitespace-pre-line">
-                  {ujian.instruction}
-                </p>
-              </div>
-            )}
-            <div className="p-4 rounded-md bg-destructive/10 border border-destructive/20">
-              <h4 className="font-semibold mb-2 flex items-center gap-2">
-                <Shield className="w-4 h-4 text-destructive" />
-                Aturan Ujian
-              </h4>
-              <ul className="text-sm space-y-1 text-destructive/90 list-disc list-inside">
-                <li>Dilarang <strong>buka tab baru</strong> — auto-submit langsung</li>
-                <li>Dilarang <strong>keluar browser</strong> — auto-submit langsung</li>
-                <li>Dilarang <strong>split screen</strong> — auto-submit langsung</li>
-                <li>Dilarang <strong>rotate ke landscape</strong> (HP) — auto-submit</li>
-                <li>Dilarang <strong>keluar fullscreen</strong> — auto-submit</li>
-                <li>Dilarang <strong>overlay app lain</strong> — auto-submit</li>
-                <li>Soal <strong>diacak</strong> — setiap mahasiswa dapat urutan berbeda</li>
-                <li>Jawaban <strong>tersimpan otomatis</strong> setiap 5 detik</li>
-                <li>Mode <strong>fullscreen</strong> akan diaktifkan</li>
-                <li>Klik kanan, copy-paste, dan shortcut diblokir</li>
-              </ul>
-            </div>
-            <div className="flex justify-end gap-3">
-              <Button variant="outline" onClick={onExit} disabled={starting}>
-                Batal
-              </Button>
-              <Button onClick={handleStart} size="lg" disabled={starting}>
-                {starting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Menyiapkan Ujian...
-                  </>
-                ) : (
-                  <>
-                    <Shield className="w-4 h-4 mr-2" />
-                    Mulai Ujian
-                  </>
-                )}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+          </Button>
+          <Button variant="ghost" onClick={onExit} disabled={starting} className="text-muted-foreground">
+            Batal
+          </Button>
+        </div>
       </div>
     )
   }
@@ -478,37 +558,52 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
 
   return (
     <div className="fixed inset-0 z-50 bg-background overflow-auto">
-      {/* Top bar */}
-      <div className="sticky top-0 z-30 bg-card border-b shadow-sm">
-        <div className="px-3 py-2 flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3 min-w-0">
-            <Shield className="w-5 h-5 text-primary flex-shrink-0" />
+      {/* Top bar — compact */}
+      <div className="sticky top-0 z-30 bg-card/95 backdrop-blur border-b">
+        <div className="px-3 py-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Shield className="w-4 h-4 text-primary flex-shrink-0" />
             <div className="min-w-0">
-              <div className="font-semibold text-sm truncate">{ujian.title}</div>
-              <div className="text-xs text-muted-foreground truncate">
+              <div className="font-medium text-xs sm:text-sm truncate">{ujian.title}</div>
+              <div className="text-[10px] text-muted-foreground truncate hidden sm:block">
                 {ujian.dosenAjar?.mataKuliah?.name}
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <Badge variant="outline">{ujian.type}</Badge>
-            <div
-              className={`flex items-center gap-1.5 font-mono font-bold ${isLowTime ? 'text-destructive' : ''}`}
-            >
-              <Clock className="w-4 h-4" />
-              <span className="text-lg">{timeStr}</span>
+          {/* Timer — prominent di top bar */}
+          <div
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-mono font-bold text-sm sm:text-base ${
+              isLowTime
+                ? 'bg-destructive text-destructive-foreground animate-pulse'
+                : 'bg-primary/10 text-primary'
+            }`}
+          >
+            <Clock className="w-4 h-4" />
+            <span>{timeStr}</span>
+          </div>
+        </div>
+        {/* Progress bar waktu — tipis */}
+        <Progress value={progressPercent} className="h-0.5 rounded-none" />
+      </div>
+
+      {/* Warning kalau fullscreen belum aktif — tampilkan tombol manual */}
+      {!document.fullscreenElement && (
+        <div className="sticky top-[44px] z-20 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800 px-3 py-2">
+          <div className="flex items-center justify-between gap-2 max-w-4xl mx-auto">
+            <div className="text-xs text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+              Fullscreen belum aktif. Aktifkan untuk keamanan ujian.
             </div>
-            <Button size="sm" variant="destructive" onClick={() => setShowSubmitConfirm(true)}>
-              <Send className="w-3.5 h-3.5" /> Submit
+            <Button size="sm" variant="outline" onClick={handleManualFullscreen} className="h-7 text-xs">
+              Aktifkan
             </Button>
           </div>
         </div>
-        <Progress value={progressPercent} className="h-1 rounded-none" />
-      </div>
+      )}
 
       {/* Violation warning */}
       {violationWarning && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 max-w-md">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 max-w-md w-[90%]">
           <div className="bg-destructive text-destructive-foreground px-4 py-3 rounded-lg shadow-2xl flex items-center gap-2">
             <AlertTriangle className="w-5 h-5 flex-shrink-0" />
             <div className="text-sm font-medium">{violationWarning}</div>
@@ -516,37 +611,31 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
         </div>
       )}
 
-      <div className="max-w-4xl mx-auto p-4 sm:p-6 lg:p-8 pb-32">
-        {/* Progress — lebih friendly mobile */}
-        <div className="mb-4 p-3 rounded-lg bg-muted/30 border">
-          <div className="flex items-center justify-between text-sm mb-2">
-            <div className="font-medium">
-              Soal <span className="text-primary">{currentSoalIdx + 1}</span>
-              <span className="text-muted-foreground"> dari {soal.length}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="text-xs">
-                Terjawab: <span className="ml-1 font-bold text-emerald-600">{answeredCount}</span>
-                <span className="text-muted-foreground">/{soal.length}</span>
-              </Badge>
-              <Badge variant="secondary" className="text-xs">{currentSoal?.points || 0} poin</Badge>
-            </div>
+      <div className="max-w-3xl mx-auto p-4 sm:p-6 pb-32">
+        {/* Progress jawaban — compact */}
+        <div className="mb-4 flex items-center justify-between text-xs">
+          <div className="font-medium">
+            Soal <span className="text-primary text-base font-bold">{currentSoalIdx + 1}</span>
+            <span className="text-muted-foreground">/{soal.length}</span>
           </div>
-          <Progress value={(answeredCount / soal.length) * 100} className="h-2" />
+          <div className="text-muted-foreground">
+            Terjawab <span className="text-emerald-600 font-bold">{answeredCount}</span>
+            /{soal.length}
+          </div>
         </div>
 
-        {/* Question */}
+        {/* Question card */}
         {currentSoal && (
-          <Card className="border-2">
+          <Card className="border-2 mb-4">
             <CardHeader className="pb-3">
               <CardTitle className="text-base sm:text-lg flex items-start gap-2 leading-relaxed">
-                <Badge variant="secondary" className="mt-1 flex-shrink-0">
+                <Badge variant="secondary" className="mt-1 flex-shrink-0 text-xs">
                   #{currentSoal.order}
                 </Badge>
                 <span>{currentSoal.pertanyaan}</span>
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-2">
               {currentSoal.type === 'MULTIPLE_CHOICE' && currentSoal.options ? (
                 <RadioGroup
                   value={answers[currentSoal.id] || ''}
@@ -601,21 +690,32 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
         )}
 
         {/* Navigation — tombol besar friendly mobile */}
-        <div className="grid grid-cols-2 gap-3 mt-6">
+        <div className="grid grid-cols-2 gap-3 mt-4">
           <Button
             variant="outline"
             size="lg"
             onClick={() => setCurrentSoalIdx(Math.max(0, currentSoalIdx - 1))}
             disabled={currentSoalIdx === 0}
-            className="h-12 text-base"
+            className="h-12 text-sm sm:text-base"
           >
             <ChevronLeft className="w-5 h-5" />
             Sebelumnya
           </Button>
+          {currentSoalIdx === soal.length - 1 ? (
+            <Button variant="destructive" size="lg" onClick={() => setShowSubmitConfirm(true)} className="h-12 text-sm sm:text-base">
+              <Send className="w-5 h-5" />
+              Submit Ujian
+            </Button>
+          ) : (
+            <Button size="lg" onClick={() => setCurrentSoalIdx(Math.min(soal.length - 1, currentSoalIdx + 1))} className="h-12 text-sm sm:text-base">
+              Selanjutnya
+              <ChevronLeft className="w-5 h-5 rotate-180" />
+            </Button>
+          )}
         </div>
 
         {/* Nomor soal — scrollable horizontal di mobile */}
-        <div className="mt-4">
+        <div className="mt-4 mb-6">
           <div className="text-xs text-muted-foreground mb-2">Loncat ke soal:</div>
           <div className="flex gap-1.5 overflow-x-auto pb-2 -mx-1 px-1">
             {soal.map((s, i) => {
@@ -637,43 +737,46 @@ export function ExamRunner({ ujian, onExit }: ExamRunnerProps) {
               )
             })}
           </div>
-          {currentSoalIdx === soal.length - 1 ? (
-            <Button variant="destructive" onClick={() => setShowSubmitConfirm(true)}>
-              <Send className="w-4 h-4" /> Submit
-            </Button>
-          ) : (
-            <Button onClick={() => setCurrentSoalIdx(Math.min(soal.length - 1, currentSoalIdx + 1))}>
-              Selanjutnya →
-            </Button>
-          )}
-        </div>
-
-        {/* Anti-cheat info */}
-        <div className="mt-6 p-3 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs">
-          <div className="flex items-start gap-2 text-amber-800 dark:text-amber-300">
-            <Eye className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <div>
-              <strong>Anti-Cheating Aktif:</strong> Jangan pindah tab, keluar browser, split screen,
-              rotate landscape, atau buka app lain. Pelanggaran akan menyebabkan auto-submit otomatis.
-            </div>
-          </div>
         </div>
       </div>
 
-      {/* Submit confirmation */}
+      {/* Sticky bottom bar — tombol submit cepat untuk akses cepat */}
+      <div className="fixed bottom-0 left-0 right-0 z-20 bg-card/95 backdrop-blur border-t px-3 py-2">
+        <div className="max-w-3xl mx-auto flex items-center justify-between gap-2">
+          <div className="text-xs text-muted-foreground">
+            {answeredCount} dari {soal.length} terjawab
+          </div>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => setShowSubmitConfirm(true)}
+            className="h-9"
+          >
+            <Send className="w-3.5 h-3.5" />
+            Submit
+          </Button>
+        </div>
+      </div>
+
+      {/* Submit confirmation — lebih friendly */}
       <AlertDialog open={showSubmitConfirm} onOpenChange={setShowSubmitConfirm}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Konfirmasi Submit Ujian</AlertDialogTitle>
-            <AlertDialogDescription>
-              Anda telah menjawab {answeredCount} dari {soal.length} soal.
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Send className="w-5 h-5 text-destructive" />
+              Submit Ujian?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">
+                Anda telah menjawab <strong>{answeredCount}</strong> dari <strong>{soal.length}</strong> soal.
+              </span>
               {answeredCount < soal.length && (
-                <span className="block mt-2 text-destructive">
-                  Masih ada {soal.length - answeredCount} soal yang belum dijawab!
+                <span className="block p-2 rounded bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 text-xs">
+                  ⚠ Masih ada {soal.length - answeredCount} soal belum dijawab.
                 </span>
               )}
-              <span className="block mt-2">
-                Setelah di-submit, Anda tidak dapat mengubah jawaban lagi.
+              <span className="block text-xs text-muted-foreground">
+                Setelah submit, jawaban tidak bisa diubah lagi.
               </span>
             </AlertDialogDescription>
           </AlertDialogHeader>

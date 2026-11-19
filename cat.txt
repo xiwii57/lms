@@ -1,0 +1,5 @@
+oke sudah benar, tapi masih ada beberapa false positif, ketika baru mulai ujian atau ujian dibuka kembali oleh operator, layar tidak otomatis full screen sehingga ujian otomatis auto submit
+
+ui ux ujian masih kurang clean serta friendly
+
+loading website masih lama

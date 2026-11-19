@@ -60,6 +60,11 @@ interface UseAntiCheatOptions {
 
 const GRACE_MS = 3000
 const MAX_RETRY = 2
+// Grace period khusus untuk EXIT_FULLSCREEN — lebih lama karena browser
+// butuh waktu untuk masuk fullscreen setelah user klik tombol Mulai Ujian.
+// Tanpa ini, anti-cheat akan trigger exit-fullscreen sebelum browser sempat
+// masuk fullscreen (terutama saat operator reopen ujian).
+const FULLSCREEN_GRACE_MS = 10000
 
 export function useAntiCheat({
   enabled,
@@ -172,8 +177,12 @@ export function useAntiCheat({
     }
 
     // --- 6. Fullscreen exit ---
+    // Grace period lebih lama (10 detik) supaya browser sempat masuk fullscreen
+    // setelah user klik tombol Mulai Ujian. Tanpa ini, anti-cheat akan trigger
+    // false positive saat baru mulai ujian / operator reopen.
     const handleFullscreenChange = () => {
-      if (!enforceFullscreen || Date.now() - startTime < GRACE_MS) return
+      if (!enforceFullscreen) return
+      if (Date.now() - startTime < FULLSCREEN_GRACE_MS) return
       if (!getFullscreenElement()) {
         reportViolation(
           'EXIT_FULLSCREEN',
@@ -241,24 +250,6 @@ export function useAntiCheat({
       }
     }
 
-    // --- 8. Pointer leave (overlay indicator) ---
-    const handlePointerLeave = (e: PointerEvent) => {
-      if (Date.now() - startTime < GRACE_MS) return
-      if (
-        e.clientY <= 0 ||
-        e.clientY >= window.innerHeight ||
-        e.clientX <= 0 ||
-        e.clientX >= window.innerWidth
-      ) {
-        blurRetry++
-        if (blurRetry >= MAX_RETRY + 1) {
-          reportViolation(
-            'OVERLAY_DETECTED',
-            'Pointer meninggalkan viewport — kemungkinan overlay app lain',
-          )
-        }
-      }
-    }
     // --- 8. Pointer leave viewport — DISABLED ---
     // Catatan: pointerleave di document terlalu false positive di mobile:
     //   - Long press untuk copy → context menu native muncul sebentar → pointerleave fire
@@ -310,9 +301,14 @@ export function useAntiCheat({
           'Split screen terdeteksi via periodic check — layar di-bagi dengan app lain',
         )
       }
-
-      // Aktif cek fullscreen exit
-      if (enforceFullscreen && !getFullscreenElement()) {
+      
+      // Aktif cek fullscreen exit — pakai FULLSCREEN_GRACE_MS (bukan GRACE_MS)
+      // supaya tidak trigger false positive di awal ujian
+      if (
+        enforceFullscreen &&
+        Date.now() - startTime >= FULLSCREEN_GRACE_MS &&
+        !getFullscreenElement()
+      ) {
         reportViolation(
           'EXIT_FULLSCREEN',
           'Keluar dari fullscreen via periodic check — kemungkinan buka app lain',
